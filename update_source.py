@@ -8,7 +8,7 @@ headers = {
 
 try:
     # ================= 1. 抓取米游社 =================
-    mys_api = "https://api-takumi.mihoyo.com/xxxx/getLatestPkgVer?channel=miyousheluodi" # 填入你之前的API
+    mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi" # 填入你之前的API
     mys_res = requests.get(mys_api, headers=headers)
     mys_res.raise_for_status()
     mys_version = mys_res.json()['data']['version']
