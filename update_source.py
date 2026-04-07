@@ -2,7 +2,7 @@ import requests
 import json
 
 # 1. 你抓到的真实 API 链接
-API_URL = "https://api-takumi.mihoyo.com/xxxx/getLatestPkgVer?channel=miyousheluodi" # 注意替换为你抓到的完整链接
+API_URL = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi" # 注意替换为你抓到的完整链接
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
