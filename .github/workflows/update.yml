@@ -1,4 +1,4 @@
-name: AppverAutoUpdate
+name: AppVerAutoUpdate
 
 on:
   schedule:
