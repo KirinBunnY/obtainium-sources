@@ -1,8 +1,8 @@
-name: Update Miyoushe Source
+name: AppverAutoUpdate
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 # 明确赋予云端机器人写入文件的权限
@@ -34,4 +34,4 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add index.html
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update Miyoushe version" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update App version" && git push)
