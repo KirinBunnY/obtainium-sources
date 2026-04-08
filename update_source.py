@@ -37,7 +37,7 @@ for game in games:
         
         if real_url:
             # 用正则从链接中提取版本号 (寻找夹在下划线或点之间的数字)
-            match = re.search(r'_([\d\.]+)[_\.]', real_url)
+            match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
             version = match.group(1) if match else "未知"
             
             # 提取安装包的文件名，方便你在网页上直接看
@@ -83,7 +83,7 @@ html_content = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body>
-    <h2>我的专属米哈游下载源</h2>
+    <h2>我的专属下载源</h2>
 {html_links}
 </body>
 </html>
