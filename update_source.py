@@ -26,7 +26,6 @@ games = [
     {"name": "云·原神", "api": "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web"},
     {"name": "云·星穹铁道", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default"},
     {"name": "云·绝区零", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame"}
-    {"name": "好游快爆", "api": "https://d.3839.com/Cj"}
 ]
 
 for game in games:
@@ -50,7 +49,35 @@ for game in games:
     except Exception as e:
         print(f"{game['name']} 抓取报错: {e}")
 
-# ================= 3. 组装并写入 HTML =================
+# ================= 4. 好游快爆 (单独处理特殊包名) =================
+try:
+    # 【注意】这里请填入你刚才抓到这个 302 响应时，真正的“请求 URL (Request URL)”
+    kb_api = "https://d.3839.com/Cj" 
+    
+    # 同样禁止跳转，只抓 Location
+    kb_res = requests.get(kb_api, headers=headers, allow_redirects=False)
+    kb_real_url = kb_res.headers.get('Location', '')
+    
+    if kb_real_url:
+        kb_filename = kb_real_url.split('/')[-1].split('?')[0]
+        
+        # 用正则精准提取 HYKB 后面的 6 位数字 (例如 158007)
+        match = re.search(r'HYKB(\d{6})', kb_real_url)
+        if match:
+            raw_v = match.group(1)
+            # 重新拼装成 1.5.8.007 的格式，让 Obtainium 抓得更准
+            kb_version = f"{raw_v[0]}.{raw_v[1]}.{raw_v[2]}.{raw_v[3:]}"
+        else:
+            kb_version = "未知"
+            
+        html_links += f'    <p>好游快爆: <a href="{kb_real_url}">v{kb_version}</a> (文件名参考: {kb_filename})</p>\n'
+        print(f"好游快爆 抓取成功: v{kb_version}")
+    else:
+        print("好游快爆 抓取失败: 未找到跳转链接")
+except Exception as e:
+    print(f"好游快爆 抓取报错: {e}")
+
+# ================= 组装并写入 HTML =================
 html_content = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
