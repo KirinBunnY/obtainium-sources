@@ -78,6 +78,32 @@ try:
 except Exception as e:
     print(f"好游快爆 抓取报错: {e}")
 
+# ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
+try:
+    # 目标网页：CHelper 的更新日志文档
+    ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
+    ch_web_res = requests.get(ch_web_url, headers=headers)
+    ch_web_res.encoding = 'utf-8'
+    
+    # 绝杀正则：直接在整个网页寻找第一个类似 "v1.2.3" 或 ">1.2.3<" 的格式
+    # 第一层匹配：寻找被 HTML 标签包裹的干净版本号，例如 <h2>v1.2.3</h2>
+    match = re.search(r'>\s*[vV]?(\d+\.\d+\.\d+)\s*<', ch_web_res.text)
+    
+    # 第二层兜底：如果没被标签紧密包裹，直接抓全网页第一个 v+数字的组合
+    if not match:
+        match = re.search(r'[vV](\d+\.\d+\.\d+)', ch_web_res.text)
+        
+    ch_version = match.group(1) if match else "未知"
+    
+    # 缝合：用抓到的版本号，配上官方的静态下载直链
+    ch_download_url = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
+    html_links += f'    <p>CHelper: <a href="{ch_download_url}">v{ch_version}</a> (识别标识: chelper)</p>\n'
+    print(f"CHelper 网页抓取成功: v{ch_version}")
+
+except Exception as e:
+    print(f"CHelper 网页抓取报错: {e}")
+
+
 # ================= 组装并写入 HTML =================
 html_content = f"""<!DOCTYPE html>
 <html>
