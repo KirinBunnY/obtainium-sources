@@ -81,20 +81,22 @@ except Exception as e:
 # ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
 try:
     # 目标网页：CHelper 的更新日志文档
-    ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
+ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
     ch_web_res = requests.get(ch_web_url, headers=headers)
     ch_web_res.encoding = 'utf-8'
     
-    # 绝杀正则：直接在整个网页寻找第一个类似 "v1.2.3" 或 ">1.2.3<" 的格式
-    # 第一层匹配：寻找被 HTML 标签包裹的干净版本号，例如 <h2>v1.2.3</h2>
-    match = re.search(r'>\s*[vV]?(\d+\.\d+\.\d+)\s*<', ch_web_res.text)
+    # 规矩1：一刀切断！把网页按 </head> 劈开，我们只在后半截（正文）里找
+    body_content = ch_web_res.text.split('</head>')[-1]
     
-    # 第二层兜底：如果没被标签紧密包裹，直接抓全网页第一个 v+数字的组合
+    # 规矩2：精准狙击标题！只寻找 <h1>, <h2> 或 <h3> 开头紧跟着的版本号
+    # [^>]* 是为了兼容 VitePress 自动生成的 id 和 class，比如 <h2 id="v1-5-2">
+    match = re.search(r'<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)', body_content)
+    
+    # 如果标题里没找到（作者可能没用标题），再用兜底方案在正文里盲抓一次
     if not match:
-        match = re.search(r'[vV](\d+\.\d+\.\d+)', ch_web_res.text)
+        match = re.search(r'[vV](\d+\.\d+\.\d+)', body_content)
         
-    ch_version = match.group(1) if match else "未知"
-    
+    ch_version = match.group(1) if match else "未知"    
     # 缝合：用抓到的版本号，配上官方的静态下载直链
     ch_download_url = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
     html_links += f'    <p>CHelper: <a href="{ch_download_url}">v{ch_version}</a> (识别标识: chelper)</p>\n'
