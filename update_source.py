@@ -81,7 +81,7 @@ except Exception as e:
 # ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
 try:
     # 目标网页：CHelper 的更新日志文档
-ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
+    ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
     ch_web_res = requests.get(ch_web_url, headers=headers)
     ch_web_res.encoding = 'utf-8'
     
