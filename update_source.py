@@ -43,8 +43,20 @@ for game in games:
             # 提取安装包的文件名，方便你在网页上直接看
             filename = real_url.split('/')[-1].split('?')[0]
             
-            html_links += f'    <p>{game["name"]}: <a href="{real_url}">v{version}</a> (文件名参考: {filename})</p>\n'
+            # 👇👇👇 针对 TapTap 的“假尾巴”拦截逻辑 👇👇👇
+            if game["name"] == "TapTap":
+                # 切掉 -rel 尾巴，只保留 2.96.0 这种干净的版本号
+                # 抛弃带有时效性 (Token) 的 real_url，换成永远不过期的 API 假尾巴链接
+                final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
+            else:
+                # 其他游戏 (原神等) 依然使用真实的跳转链接
+                final_url = real_url
+            # 👆👆👆 拦截结束 👆👆👆
+            
+            # ⚠️ 注意这里：超链接里的变量从 real_url 换成了 final_url
+            html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
             print(f"{game['name']} 抓取成功: v{version}")
+
         else:
             print(f"{game['name']} 抓取失败: 未找到跳转链接")
     except Exception as e:
