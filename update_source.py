@@ -44,10 +44,15 @@ for game in games:
                 filename = real_url.split('/')[-1].split('?')[0]
                 
                 # 针对 TapTap 的拦截逻辑
+                                # 针对 TapTap 的拦截逻辑
                 if game["name"] == "TapTap":
+                    # 👇 新增这行代码：把 '-rel.' 替换成 '-rel#'
+                    version = version.replace('-rel.', '-rel#')
+                    
                     final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
                 else:
                     final_url = real_url
+
                     
                 html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
                 print(f"{game['name']} 抓取成功: v{version}")
