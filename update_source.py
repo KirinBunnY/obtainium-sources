@@ -2,6 +2,9 @@ import requests
 import re
 import json
 import time
+import base64
+import re
+import cloudscraper
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -130,6 +133,48 @@ except Exception as e:
     print(f"CHelper 网页抓取报错: {e}")
 
 
+# ================= 8. TickTick (Apkmody 破盾版) =================
+try:
+    mody_url = "https://apkmody.com/apps/ticktick/download/0"
+    
+    # 实例化一个能穿透 Cloudflare 的刮削器
+    scraper = cloudscraper.create_scraper(browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    })
+    
+    # 用 scraper 代替 requests 发起请求
+    mody_res = scraper.get(mody_url)
+    mody_res.encoding = 'utf-8'
+    
+    # 💡 调试秘籍：如果你还想知道自己是不是被拦截了，可以把前 200 个字符打印出来看看
+    # print("获取到的源码前段:", mody_res.text[:200])
+    
+    # 正则照旧，去抠 data-href
+    hash_match = re.search(r'data-href=[\'\"]([A-Za-z0-9+/=]+)[\'\"]', mody_res.text)
+    
+    if hash_match:
+        encoded_hash = hash_match.group(1)
+        decoded_url = base64.b64decode(encoded_hash).decode('utf-8')
+        
+        if "/v2/" in decoded_url:
+            original_domain = decoded_url.split('/')[2]
+            final_mody_url = decoded_url.replace(original_domain, 's1.1phut.io')
+        else:
+            final_mody_url = decoded_url
+
+        ver_match = re.search(r'TickTick.*?v([\d\.]+)', mody_res.text, re.IGNORECASE)
+        mody_version = ver_match.group(1) if ver_match else "未知"
+        
+        html_links += f'    <p>TickTick: <a href="{final_mody_url}">v{mody_version}</a> (识别标识: ticktick)</p>\n'
+        print(f"TickTick 抓取成功: v{mody_version}")
+    else:
+        print("TickTick 抓取失败: 未在源码中找到 data-href 密文。可能仍被 Cloudflare 拦截，或网页结构已改版。")
+        
+except Exception as e:
+    print(f"TickTick 抓取报错: {e}")
+    
 # ================= 组装并写入 HTML =================
 html_content = f"""<!DOCTYPE html>
 <html>
