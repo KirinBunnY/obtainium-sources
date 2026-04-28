@@ -1,6 +1,7 @@
 import requests
 import re
 import json
+import time
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -20,7 +21,7 @@ try:
 except Exception as e:
     print(f"米游社 抓取报错: {e}")
 
-# ================= 2. 游戏客户端 (统一逻辑：处理302重定向) =================
+# ================= 2. 游戏客户端 (统一逻辑：处理302重定向 + 失败重试) =================
 games = [
     {"name": "原神", "api": "https://ys-api.mihoyo.com/event/download_porter/link/ys_cn/official/android_default"},
     {"name": "云·原神", "api": "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web"},
@@ -30,37 +31,43 @@ games = [
 ]
 
 for game in games:
-    try:
-        # allow_redirects=False：绝不下载文件，只偷看跳转地址！
-        res = requests.get(game["api"], headers=headers, allow_redirects=False)
-        real_url = res.headers.get('Location', '')
-        
-        if real_url:
-            # 用正则从链接中提取版本号 (寻找夹在下划线或点之间的数字)
-            match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
-            version = match.group(1) if match else "未知"
+    max_retries = 3  # 最大重试次数
+    for attempt in range(max_retries):
+        try:
+            # 加上 timeout=10，防止被服务器一直挂起卡死
+            res = requests.get(game["api"], headers=headers, allow_redirects=False, timeout=10)
+            real_url = res.headers.get('Location', '')
             
-            # 提取安装包的文件名，方便你在网页上直接看
-            filename = real_url.split('/')[-1].split('?')[0]
-            
-            # 👇👇👇 针对 TapTap 的“假尾巴”拦截逻辑 👇👇👇
-            if game["name"] == "TapTap":
-                # 切掉 -rel 尾巴，只保留 2.96.0 这种干净的版本号
-                # 抛弃带有时效性 (Token) 的 real_url，换成永远不过期的 API 假尾巴链接
-                final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
+            if real_url:
+                match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
+                version = match.group(1) if match else "未知"
+                filename = real_url.split('/')[-1].split('?')[0]
+                
+                # 针对 TapTap 的拦截逻辑
+                if game["name"] == "TapTap":
+                    final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
+                else:
+                    final_url = real_url
+                    
+                html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
+                print(f"{game['name']} 抓取成功: v{version}")
             else:
-                # 其他游戏 (原神等) 依然使用真实的跳转链接
-                final_url = real_url
-            # 👆👆👆 拦截结束 👆👆👆
+                print(f"{game['name']} 抓取失败: 未找到跳转链接")
             
-            # ⚠️ 注意这里：超链接里的变量从 real_url 换成了 final_url
-            html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
-            print(f"{game['name']} 抓取成功: v{version}")
-
-        else:
-            print(f"{game['name']} 抓取失败: 未找到跳转链接")
-    except Exception as e:
-        print(f"{game['name']} 抓取报错: {e}")
+            # 走到这里说明成功了，用 break 强行跳出重试循环，去抓下一个游戏！
+            break 
+            
+        except requests.exceptions.RequestException as e:
+            # 专门捕获网络异常（包括断连、超时等）
+            if attempt < max_retries - 1:
+                print(f"{game['name']} 网络连接失败，休息 2 秒后进行第 {attempt + 1} 次重试...")
+                time.sleep(2)  # 稍微停顿一下，防止被彻底拉黑
+            else:
+                print(f"{game['name']} 抓取报错 (已达最大重试次数): {e}")
+        except Exception as e:
+            # 其他奇怪的代码错误，直接报错不重试
+            print(f"{game['name']} 发生未知报错: {e}")
+            break
 
 # ================= 4. 好游快爆 (单独处理特殊包名) =================
 try:
