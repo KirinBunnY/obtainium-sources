@@ -5,6 +5,7 @@ import time
 import base64
 import re
 import cloudscraper
+from curl_cffi import requests as cffi_requests
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -133,25 +134,27 @@ except Exception as e:
     print(f"CHelper 网页抓取报错: {e}")
 
 
-# ================= 8. TickTick (Apkmody 破盾版) =================
+# ================= 6. TickTick (Apkmody 终极破盾版 + 本地代理) =================
 try:
     mody_url = "https://apkmody.com/apps/ticktick/download/0"
     
-    # 实例化一个能穿透 Cloudflare 的刮削器
-    scraper = cloudscraper.create_scraper(browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    })
+    # 强制让 Python 走你的本地代理（假设你的代理端口是 7890，如果不是请修改）
+    # 如果你是开的全局 TUN 模式，可以把这两行注释掉
+    proxies = {
+        "http": "http://127.0.0.1:7897",
+        "https": "http://127.0.0.1:7897"
+    }
     
-    # 用 scraper 代替 requests 发起请求
-    mody_res = scraper.get(mody_url)
+    # 完美伪装：impersonate="chrome" 会在底层完全模拟 Chrome 的 SSL 握手特征
+    mody_res = cffi_requests.get(
+        mody_url, 
+        impersonate="chrome", 
+        proxies=proxies,
+        timeout=15 # 设置个超时时间，防止干等
+    )
     mody_res.encoding = 'utf-8'
     
-    # 💡 调试秘籍：如果你还想知道自己是不是被拦截了，可以把前 200 个字符打印出来看看
-    # print("获取到的源码前段:", mody_res.text[:200])
-    
-    # 正则照旧，去抠 data-href
+    # --- 下面的切割和正则逻辑完全保持不变 ---
     hash_match = re.search(r'data-href=[\'\"]([A-Za-z0-9+/=]+)[\'\"]', mody_res.text)
     
     if hash_match:
@@ -164,13 +167,20 @@ try:
         else:
             final_mody_url = decoded_url
 
-        ver_match = re.search(r'TickTick.*?v([\d\.]+)', mody_res.text, re.IGNORECASE)
+        btn_index = hash_match.start()
+        start_idx = max(0, btn_index - 800)
+        end_idx = min(len(mody_res.text), btn_index + 400)
+        local_html = mody_res.text[start_idx:end_idx]
+        
+        ver_match = re.search(r'TickTick_v([\d\.]+)', local_html, re.IGNORECASE)
         mody_version = ver_match.group(1) if ver_match else "未知"
+        mody_version = mody_version.rstrip('.')
         
         html_links += f'    <p>TickTick: <a href="{final_mody_url}">v{mody_version}</a> (识别标识: ticktick)</p>\n'
         print(f"TickTick 抓取成功: v{mody_version}")
+        
     else:
-        print("TickTick 抓取失败: 未在源码中找到 data-href 密文。可能仍被 Cloudflare 拦截，或网页结构已改版。")
+        print("TickTick 抓取失败: 源码中未找到 data-href")
         
 except Exception as e:
     print(f"TickTick 抓取报错: {e}")
