@@ -5,6 +5,7 @@ import time
 import base64
 import re
 import cloudscraper
+import os
 from curl_cffi import requests as cffi_requests
 
 headers = {
@@ -135,22 +136,27 @@ except Exception as e:
 
 
 # ================= 6. TickTick (Apkmody 终极破盾版 + 本地代理) =================
+# ================= 8. TickTick (自动切换环境版) =================
 try:
     mody_url = "https://apkmody.com/apps/ticktick/download/0"
     
-    # 强制让 Python 走你的本地代理（假设你的代理端口是 7890，如果不是请修改）
-    # 如果你是开的全局 TUN 模式，可以把这两行注释掉
-    proxies = {
-        "http": "http://127.0.0.1:7897",
-        "https": "http://127.0.0.1:7897"
-    }
+    # 🌟 极客魔法：判断当前是否在 GitHub Actions 云端环境
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        print("检测到云端环境，切换为直连模式...")
+        my_proxies = None  # 云端直连，不需要代理
+    else:
+        print("检测到本地环境，挂载本地代理...")
+        my_proxies = {
+            "http": "http://127.0.0.1:7897",
+            "https": "http://127.0.0.1:7897"
+        }
     
-    # 完美伪装：impersonate="chrome" 会在底层完全模拟 Chrome 的 SSL 握手特征
+    # 带着智能代理配置发起冲锋
     mody_res = cffi_requests.get(
         mody_url, 
         impersonate="chrome", 
-        proxies=proxies,
-        timeout=15 # 设置个超时时间，防止干等
+        proxies=my_proxies, # 如果是 None，curl_cffi 会自动忽略
+        timeout=15
     )
     mody_res.encoding = 'utf-8'
     
