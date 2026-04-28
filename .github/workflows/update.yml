@@ -24,7 +24,9 @@ jobs:
           python-version: '3.10'
 
       - name: 安装依赖
-        run: pip install requests
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests cloudscraper curl_cffi
 
       - name: 运行爬虫脚本
         run: python update_source.py
