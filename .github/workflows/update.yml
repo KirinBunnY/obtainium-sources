@@ -1,39 +1,42 @@
-name: AppVerAutoUpdate
+name: 每日自动更新应用源
 
+# 触发条件：什么时候运行这个脚本？
 on:
   schedule:
-    - cron: '0 23 * * *'
-  workflow_dispatch:
-
-# 明确赋予云端机器人写入文件的权限
-permissions:
-  contents: write
+    # 每天北京时间早上 8 点运行 (GitHub 服务器用的是 UTC 时间，8 - 8 = 0)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 这个神器可以让你在 GitHub 网页上或者 VS Code 里手动点击“立即运行”
 
 jobs:
-  update-html:
-    runs-on: ubuntu-latest
+  run-scraper:
+    runs-on: ubuntu-latest # 给我们分配一台最新的 Ubuntu 服务器
+
     steps:
-      # 升级到 v4 消除警告
-      - name: 检出代码
+      - name: 1. 检出你的代码
         uses: actions/checkout@v4
 
-      # 升级到 v5 消除警告
-      - name: 配置 Python 环境
+      - name: 2. 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
+      - name: 3. 安装终极破盾依赖包
         run: |
           python -m pip install --upgrade pip
           pip install requests cloudscraper curl_cffi
 
-      - name: 运行爬虫脚本
+      - name: 4. 运行你的神级爬虫脚本
         run: python update_source.py
 
-      - name: 提交并推送到仓库
+      - name: 5. 将战利品 (index.html) 提交并推送到仓库
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          # 伪装成一个云端机器人来提交代码
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          
+          # 将变动加入暂存区
           git add index.html
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update App version" && git push)
+          
+          # 核心逻辑：只有当版本号真的更新了（文件发生了变动），才执行提交和推送
+          # 防止代码没变也强行提交，把提交历史弄得非常乱
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: 获取最新应用版本" && git push)
