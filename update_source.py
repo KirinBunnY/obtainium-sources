@@ -10,17 +10,39 @@ headers = {
 
 html_links = ""
 
-# ================= 1. 米游社 (单独逻辑：解析JSON) =================
-try:
-    mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
-    mys_res = requests.get(mys_api, headers=headers)
-    mys_res.raise_for_status()
-    mys_version = mys_res.json()['data']['version']
-    mys_url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{mys_version}_miyousheluodi.apk"
-    html_links += f'    <p>米游社: <a href="{mys_url}">v{mys_version}</a> (文件名参考: mihoyobbs)</p>\n'
-    print(f"米游社 抓取成功: v{mys_version}")
-except Exception as e:
-    print(f"米游社 抓取报错: {e}")
+# ================= 1. 米游社 (强化版：带重试逻辑 + 伪装标头) =================
+# 先定义一个专门给米游社用的加强版标头
+mys_headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Referer": "https://www.miyoushe.com/",
+    "Host": "bbs-api.miyoushe.com"
+}
+
+for attempt in range(3): # 给它 3 次机会
+    try:
+        mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
+        # 使用加强版标头，并设置 10 秒超时
+        mys_res = requests.get(mys_api, headers=mys_headers, timeout=10)
+        mys_res.raise_for_status()
+        
+        mys_data = mys_res.json()
+        if mys_data.get('data'):
+            mys_version = mys_data['data']['version']
+            mys_url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{mys_version}_miyousheluodi.apk"
+            html_links += f'    <p>米游社: <a href="{mys_url}">v{mys_version}</a> (文件名参考: mihoyobbs)</p>\n'
+            print(f"米游社 抓取成功: v{mys_version}")
+            break # 成功了就跳出重试循环
+        else:
+            print(f"米游社 响应异常: {mys_data}")
+            break
+            
+    except Exception as e:
+        if attempt < 2:
+            print(f"米游社 抓取碰到玄学报错，2 秒后进行第 {attempt + 1} 次重试... ({e})")
+            time.sleep(2)
+        else:
+            print(f"米游社 彻底抓取失败 (已达最大重试次数): {e}")
+
 
 # ================= 2. 游戏客户端 (统一逻辑：处理302重定向 + 失败重试) =================
 games = [
