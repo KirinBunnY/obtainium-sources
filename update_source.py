@@ -3,12 +3,47 @@ import re
 import json
 import time
 import os
+from urllib3.exceptions import InsecureRequestWarning
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 html_links = ""
+
+
+def fetch_chelper_page(url, max_retries=3):
+    """CHelper 官网证书偶尔异常，只在这个站点失败后降级重试。"""
+    ch_headers = {
+        **headers,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Connection": "close",
+    }
+    last_error = None
+
+    for verify_ssl in (True, False):
+        if not verify_ssl:
+            requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+
+        for attempt in range(max_retries):
+            try:
+                res = requests.get(url, headers=ch_headers, timeout=15, verify=verify_ssl)
+                res.raise_for_status()
+                if not verify_ssl:
+                    print("CHelper HTTPS 校验失败，已仅对此站点关闭证书校验后重试成功")
+                res.encoding = 'utf-8'
+                return res.text
+            except requests.exceptions.SSLError as e:
+                last_error = e
+                if verify_ssl:
+                    break
+            except requests.exceptions.RequestException as e:
+                last_error = e
+
+            if attempt < max_retries - 1:
+                time.sleep(2)
+
+    raise last_error if last_error else RuntimeError("CHelper 页面请求失败")
 
 # ================= 1. 米游社 (单独逻辑：解析JSON) =================
 try:
@@ -107,11 +142,10 @@ except Exception as e:
 try:
     # 目标网页：CHelper 的更新日志文档
     ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
-    ch_web_res = requests.get(ch_web_url, headers=headers)
-    ch_web_res.encoding = 'utf-8'
+    ch_web_text = fetch_chelper_page(ch_web_url)
     
     # 规矩1：一刀切断！把网页按 </head> 劈开，我们只在后半截（正文）里找
-    body_content = ch_web_res.text.split('</head>')[-1]
+    body_content = ch_web_text.split('</head>')[-1]
     
     # 规矩2：精准狙击标题！只寻找 <h1>, <h2> 或 <h3> 开头紧跟着的版本号
     # [^>]* 是为了兼容 VitePress 自动生成的 id 和 class，比如 <h2 id="v1-5-2">
