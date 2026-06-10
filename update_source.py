@@ -85,6 +85,7 @@ games = [
     {"name": "云·原神", "api": "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web"},
     {"name": "云·星穹铁道", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default"},
     {"name": "云·绝区零", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame"},
+    {"name": "植物大战僵尸2", "api": "https://pvz2download.ditwan.cn/download-service/baokai"}
     {"name": "TapTap", "api": "https://d.taptap.cn/latest/seo-bing"}
 ]
 
@@ -96,28 +97,28 @@ for game in games:
             res = requests.get(game["api"], headers=headers, allow_redirects=False, timeout=10)
             real_url = res.headers.get('Location', '')
             
-            if real_url:
-                match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
-                version = match.group(1) if match else "未知"
+           if real_url:
                 filename = real_url.split('/')[-1].split('?')[0]
                 
-                # 针对 TapTap 的拦截逻辑
-                                # 针对 TapTap 的拦截逻辑
+                # 🌟 新增：对 PVZ2 使用专属正则提取版本号
+                if game["name"] == "植物大战僵尸2":
+                    # 从 baokai_4.1.3_1817... 中精准抠出 4.1.3
+                    match = re.search(r'baokai_([\d\.]+)_', real_url)
+                    version = match.group(1) if match else "未知"
+                else:
+                    # 其他游戏保留原来的通用正则
+                    match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
+                    version = match.group(1) if match else "未知"
+                
+                # 下面保留你原本的 TapTap 拦截逻辑
                 if game["name"] == "TapTap":
-                    # 👇 新增这行代码：把 '-rel.' 替换成 '-rel#'
                     version = version.replace('-rel.', '-rel#')
-                    
                     final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
                 else:
                     final_url = real_url
 
-                    
                 html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
                 print(f"{game['name']} 抓取成功: v{version}")
-            else:
-                print(f"{game['name']} 抓取失败: 未找到跳转链接")
-            
-            # 走到这里说明成功了，用 break 强行跳出重试循环，去抓下一个游戏！
             break 
             
         except requests.exceptions.RequestException as e:
