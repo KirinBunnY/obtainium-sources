@@ -1,15 +1,101 @@
 import requests
 import re
-import json
+import random
 import time
-import os
 from urllib3.exceptions import InsecureRequestWarning
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+DEFAULT_TIMEOUT = 10
+DEFAULT_RETRIES = 3
+RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+
 html_links = ""
+
+
+class MissingLocationError(RuntimeError):
+    pass
+
+
+def get_retry_delay(attempt, response=None, base_delay=1.5, max_delay=8):
+    retry_after = response.headers.get("Retry-After") if response is not None else None
+    if retry_after:
+        try:
+            return min(float(retry_after), max_delay)
+        except ValueError:
+            pass
+
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    return delay + random.uniform(0, 0.5)
+
+
+def get_with_retry(
+    name,
+    url,
+    *,
+    request_headers=None,
+    timeout=DEFAULT_TIMEOUT,
+    max_retries=DEFAULT_RETRIES,
+    allow_redirects=True,
+    verify=True,
+    require_location=False,
+    retry_ssl_errors=True,
+):
+    request_headers = request_headers or headers
+    last_error = None
+    last_response = None
+
+    for attempt in range(max_retries):
+        try:
+            res = requests.get(
+                url,
+                headers=request_headers,
+                allow_redirects=allow_redirects,
+                timeout=timeout,
+                verify=verify,
+            )
+            last_response = res
+
+            if res.status_code in RETRYABLE_STATUS_CODES:
+                raise requests.exceptions.HTTPError(
+                    f"{name} 返回可重试状态码 HTTP {res.status_code}",
+                    response=res,
+                )
+
+            res.raise_for_status()
+
+            if require_location and not res.headers.get("Location"):
+                raise MissingLocationError(f"{name} 响应缺少 Location 跳转链接")
+
+            return res
+
+        except requests.exceptions.SSLError as e:
+            if not retry_ssl_errors:
+                raise
+            last_error = e
+            last_response = None
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else None
+            if status_code not in RETRYABLE_STATUS_CODES:
+                raise
+            last_error = e
+            last_response = e.response
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            last_response = getattr(e, "response", None)
+        except MissingLocationError as e:
+            last_error = e
+
+        if attempt == max_retries - 1:
+            break
+
+        delay = get_retry_delay(attempt, last_response)
+        print(f"{name} 请求失败，第 {attempt + 2}/{max_retries} 次尝试将在 {delay:.1f} 秒后开始... ({last_error})")
+        time.sleep(delay)
+
+    raise last_error if last_error else RuntimeError(f"{name} 请求失败")
 
 
 def fetch_chelper_page(url, max_retries=3):
@@ -19,31 +105,30 @@ def fetch_chelper_page(url, max_retries=3):
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Connection": "close",
     }
-    last_error = None
 
-    for verify_ssl in (True, False):
-        if not verify_ssl:
-            requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+    try:
+        res = get_with_retry(
+            "CHelper",
+            url,
+            request_headers=ch_headers,
+            timeout=15,
+            max_retries=max_retries,
+            retry_ssl_errors=False,
+        )
+    except requests.exceptions.SSLError:
+        requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+        res = get_with_retry(
+            "CHelper",
+            url,
+            request_headers=ch_headers,
+            timeout=15,
+            max_retries=max_retries,
+            verify=False,
+        )
+        print("CHelper HTTPS 校验失败，已仅对此站点关闭证书校验后重试成功")
 
-        for attempt in range(max_retries):
-            try:
-                res = requests.get(url, headers=ch_headers, timeout=15, verify=verify_ssl)
-                res.raise_for_status()
-                if not verify_ssl:
-                    print("CHelper HTTPS 校验失败，已仅对此站点关闭证书校验后重试成功")
-                res.encoding = 'utf-8'
-                return res.text
-            except requests.exceptions.SSLError as e:
-                last_error = e
-                if verify_ssl:
-                    break
-            except requests.exceptions.RequestException as e:
-                last_error = e
-
-            if attempt < max_retries - 1:
-                time.sleep(2)
-
-    raise last_error if last_error else RuntimeError("CHelper 页面请求失败")
+    res.encoding = 'utf-8'
+    return res.text
 
 # ================= 1. 米游社 (强化版：带重试逻辑 + 伪装标头) =================
 # 先定义一个专门给米游社用的加强版标头
@@ -53,30 +138,23 @@ mys_headers = {
     "Host": "bbs-api.miyoushe.com"
 }
 
-for attempt in range(3): # 给它 3 次机会
-    try:
-        mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
-        # 使用加强版标头，并设置 10 秒超时
-        mys_res = requests.get(mys_api, headers=mys_headers, timeout=10)
-        mys_res.raise_for_status()
-        
-        mys_data = mys_res.json()
-        if mys_data.get('data'):
-            mys_version = mys_data['data']['version']
-            mys_url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{mys_version}_miyousheluodi.apk"
-            html_links += f'    <p>米游社: <a href="{mys_url}">v{mys_version}</a> (文件名参考: mihoyobbs)</p>\n'
-            print(f"米游社 抓取成功: v{mys_version}")
-            break # 成功了就跳出重试循环
-        else:
-            print(f"米游社 响应异常: {mys_data}")
-            break
-            
-    except Exception as e:
-        if attempt < 2:
-            print(f"米游社 抓取碰到玄学报错，2 秒后进行第 {attempt + 1} 次重试... ({e})")
-            time.sleep(2)
-        else:
-            print(f"米游社 彻底抓取失败 (已达最大重试次数): {e}")
+try:
+    mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
+    mys_res = get_with_retry("米游社", mys_api, request_headers=mys_headers)
+
+    mys_data = mys_res.json()
+    if mys_data.get('data'):
+        mys_version = mys_data['data']['version']
+        mys_url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{mys_version}_miyousheluodi.apk"
+        html_links += f'    <p>米游社: <a href="{mys_url}">v{mys_version}</a> (文件名参考: mihoyobbs)</p>\n'
+        print(f"米游社 抓取成功: v{mys_version}")
+    else:
+        print(f"米游社 响应异常: {mys_data}")
+
+except requests.exceptions.RequestException as e:
+    print(f"米游社 抓取报错: {e}")
+except Exception as e:
+    print(f"米游社 数据解析报错: {e}")
 
 
 # ================= 2. 游戏客户端 (统一逻辑：处理302重定向 + 失败重试) =================
@@ -90,48 +168,41 @@ games = [
 ]
 
 for game in games:
-    max_retries = 3  # 最大重试次数
-    for attempt in range(max_retries):
-        try:
-            # 加上 timeout=10，防止被服务器一直挂起卡死
-            res = requests.get(game["api"], headers=headers, allow_redirects=False, timeout=10)
-            real_url = res.headers.get('Location', '')
-            
-            if real_url:
-                filename = real_url.split('/')[-1].split('?')[0]
-                
-                # 🌟 新增：对 PVZ2 使用专属正则提取版本号
-                if game["name"] == "植物大战僵尸2":
-                    # 从 baokai_4.1.3_1817... 中精准抠出 4.1.3
-                    match = re.search(r'baokai_([\d\.]+)_', real_url)
-                    version = match.group(1) if match else "未知"
-                else:
-                    # 其他游戏保留原来的通用正则
-                    match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
-                    version = match.group(1) if match else "未知"
-                
-                # 下面保留你原本的 TapTap 拦截逻辑
-                if game["name"] == "TapTap":
-                    version = version.replace('-rel.', '-rel#')
-                    final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
-                else:
-                    final_url = real_url
+    try:
+        res = get_with_retry(
+            game["name"],
+            game["api"],
+            allow_redirects=False,
+            require_location=True,
+        )
+        real_url = res.headers['Location']
+        filename = real_url.split('/')[-1].split('?')[0]
 
-                html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
-                print(f"{game['name']} 抓取成功: v{version}")
-            break 
-            
-        except requests.exceptions.RequestException as e:
-            # 专门捕获网络异常（包括断连、超时等）
-            if attempt < max_retries - 1:
-                print(f"{game['name']} 网络连接失败，休息 2 秒后进行第 {attempt + 1} 次重试...")
-                time.sleep(2)  # 稍微停顿一下，防止被彻底拉黑
-            else:
-                print(f"{game['name']} 抓取报错 (已达最大重试次数): {e}")
-        except Exception as e:
-            # 其他奇怪的代码错误，直接报错不重试
-            print(f"{game['name']} 发生未知报错: {e}")
-            break
+        # 🌟 新增：对 PVZ2 使用专属正则提取版本号
+        if game["name"] == "植物大战僵尸2":
+            # 从 baokai_4.1.3_1817... 中精准抠出 4.1.3
+            match = re.search(r'baokai_([\d\.]+)_', real_url)
+            version = match.group(1) if match else "未知"
+        else:
+            # 其他游戏保留原来的通用正则
+            match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
+            version = match.group(1) if match else "未知"
+
+        # 下面保留你原本的 TapTap 拦截逻辑
+        if game["name"] == "TapTap":
+            version = version.replace('-rel.', '-rel#')
+            final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
+        else:
+            final_url = real_url
+
+        html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
+        print(f"{game['name']} 抓取成功: v{version}")
+
+    except (requests.exceptions.RequestException, MissingLocationError) as e:
+        print(f"{game['name']} 抓取报错: {e}")
+    except Exception as e:
+        # 其他奇怪的代码错误，直接报错不重试
+        print(f"{game['name']} 发生未知报错: {e}")
 
 # ================= 4. 好游快爆 (单独处理特殊包名) =================
 try:
@@ -139,25 +210,26 @@ try:
     kb_api = "https://d.3839.com/Cj" 
     
     # 同样禁止跳转，只抓 Location
-    kb_res = requests.get(kb_api, headers=headers, allow_redirects=False)
-    kb_real_url = kb_res.headers.get('Location', '')
-    
-    if kb_real_url:
-        kb_filename = kb_real_url.split('/')[-1].split('?')[0]
-        
-        # 用正则精准提取 HYKB 后面的 6 位数字 (例如 158007)
-        match = re.search(r'HYKB(\d{6})', kb_real_url)
-        if match:
-            raw_v = match.group(1)
-            # 重新拼装成 1.5.8.007 的格式，让 Obtainium 抓得更准
-            kb_version = f"{raw_v[0]}.{raw_v[1]}.{raw_v[2]}.{raw_v[3:]}"
-        else:
-            kb_version = "未知"
-            
-        html_links += f'    <p>好游快爆: <a href="{kb_real_url}">v{kb_version}</a> (文件名参考: {kb_filename})</p>\n'
-        print(f"好游快爆 抓取成功: v{kb_version}")
+    kb_res = get_with_retry(
+        "好游快爆",
+        kb_api,
+        allow_redirects=False,
+        require_location=True,
+    )
+    kb_real_url = kb_res.headers['Location']
+    kb_filename = kb_real_url.split('/')[-1].split('?')[0]
+
+    # 用正则精准提取 HYKB 后面的 6 位数字 (例如 158007)
+    match = re.search(r'HYKB(\d{6})', kb_real_url)
+    if match:
+        raw_v = match.group(1)
+        # 重新拼装成 1.5.8.007 的格式，让 Obtainium 抓得更准
+        kb_version = f"{raw_v[0]}.{raw_v[1]}.{raw_v[2]}.{raw_v[3:]}"
     else:
-        print("好游快爆 抓取失败: 未找到跳转链接")
+        kb_version = "未知"
+
+    html_links += f'    <p>好游快爆: <a href="{kb_real_url}">v{kb_version}</a> (文件名参考: {kb_filename})</p>\n'
+    print(f"好游快爆 抓取成功: v{kb_version}")
 except Exception as e:
     print(f"好游快爆 抓取报错: {e}")
 
