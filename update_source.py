@@ -85,7 +85,7 @@ games = [
     {"name": "云·原神", "api": "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web"},
     {"name": "云·星穹铁道", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default"},
     {"name": "云·绝区零", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame"},
-    {"name": "植物大战僵尸2", "api": "https://pvz2download.ditwan.cn/download-service/baokai"}
+    {"name": "植物大战僵尸2", "api": "https://pvz2download.ditwan.cn/download-service/baokai"},
     {"name": "TapTap", "api": "https://d.taptap.cn/latest/seo-bing"}
 ]
 
@@ -97,7 +97,7 @@ for game in games:
             res = requests.get(game["api"], headers=headers, allow_redirects=False, timeout=10)
             real_url = res.headers.get('Location', '')
             
-           if real_url:
+            if real_url:
                 filename = real_url.split('/')[-1].split('?')[0]
                 
                 # 🌟 新增：对 PVZ2 使用专属正则提取版本号
