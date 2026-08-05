@@ -235,22 +235,31 @@ except Exception as e:
 
 # ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
 try:
-    # 目标网页：CHelper 的更新日志文档
-    ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
-    ch_web_text = fetch_chelper_page(ch_web_url)
-    
-    # 规矩1：一刀切断！把网页按 </head> 劈开，我们只在后半截（正文）里找
-    body_content = ch_web_text.split('</head>')[-1]
-    
-    # 规矩2：精准狙击标题！只寻找 <h1>, <h2> 或 <h3> 开头紧跟着的版本号
-    # [^>]* 是为了兼容 VitePress 自动生成的 id 和 class，比如 <h2 id="v1-5-2">
-    match = re.search(r'<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)', body_content)
-    
-    # 如果标题里没找到（作者可能没用标题），再用兜底方案在正文里盲抓一次
-    if not match:
-        match = re.search(r'[vV](\d+\.\d+\.\d+)', body_content)
-        
-    ch_version = match.group(1) if match else "未知"    
+    # CHelper 官网更新日志页是 VitePress RemoteMarkdown 组件，正文由前端 JS
+    # 从 CHANGELOG.md 异步加载，静态 HTML 里没有版本号，所以直接抓 CHANGELOG.md
+    ch_md_url = "https://www.yanceymc.cn/api/chelper/CHANGELOG.md"
+    ch_md_text = fetch_chelper_page(ch_md_url)
+    ch_md_match = re.search(r'^[vV]?(\d+\.\d+\.\d+)', ch_md_text, re.MULTILINE)
+    ch_version = ch_md_match.group(1) if ch_md_match else None
+
+    if not ch_version:
+        # 兜底：老逻辑，从更新日志页的静态 HTML 里找版本号
+        ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
+        ch_web_text = fetch_chelper_page(ch_web_url)
+
+        # 规矩1：一刀切断！把网页按 </head> 劈开，我们只在后半截（正文）里找
+        body_content = ch_web_text.split('</head>')[-1]
+
+        # 规矩2：精准狙击标题！只寻找 <h1>, <h2> 或 <h3> 开头紧跟着的版本号
+        # [^>]* 是为了兼容 VitePress 自动生成的 id 和 class，比如 <h2 id="v1-5-2">
+        match = re.search(r'<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)', body_content)
+
+        # 如果标题里没找到（作者可能没用标题），再用兜底方案在正文里盲抓一次
+        if not match:
+            match = re.search(r'[vV](\d+\.\d+\.\d+)', body_content)
+
+        ch_version = match.group(1) if match else "未知"
+
     # 缝合：用抓到的版本号，配上官方的静态下载直链
     ch_download_url = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
     html_links += f'    <p>CHelper: <a href="{ch_download_url}">v{ch_version}</a> (识别标识: chelper)</p>\n'
@@ -273,3 +282,4 @@ html_content = f"""<!DOCTYPE html>
 
 with open("index.html", "w", encoding="utf-8") as f:
     f.write(html_content)
+
