@@ -1,6 +1,8 @@
+import os
 import requests
 import re
 import random
+import sys
 import time
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -13,6 +15,7 @@ DEFAULT_RETRIES = 3
 RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 html_links = ""
+fetch_failures = 0
 
 
 class MissingLocationError(RuntimeError):
@@ -150,11 +153,14 @@ try:
         print(f"米游社 抓取成功: v{mys_version}")
     else:
         print(f"米游社 响应异常: {mys_data}")
+        fetch_failures += 1
 
 except requests.exceptions.RequestException as e:
     print(f"米游社 抓取报错: {e}")
+    fetch_failures += 1
 except Exception as e:
     print(f"米游社 数据解析报错: {e}")
+    fetch_failures += 1
 
 
 # ================= 2. 游戏客户端 (统一逻辑：处理302重定向 + 失败重试) =================
@@ -188,6 +194,8 @@ for game in games:
             match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
             version = match.group(1) if match else "未知"
 
+        if version == "未知":
+            fetch_failures += 1
         # 下面保留你原本的 TapTap 拦截逻辑
         if game["name"] == "TapTap":
             version = version.replace('-rel.', '-rel#')
@@ -200,9 +208,11 @@ for game in games:
 
     except (requests.exceptions.RequestException, MissingLocationError) as e:
         print(f"{game['name']} 抓取报错: {e}")
+        fetch_failures += 1
     except Exception as e:
         # 其他奇怪的代码错误，直接报错不重试
         print(f"{game['name']} 发生未知报错: {e}")
+        fetch_failures += 1
 
 # ================= 4. 好游快爆 (单独处理特殊包名) =================
 try:
@@ -227,11 +237,13 @@ try:
         kb_version = f"{raw_v[0]}.{raw_v[1]}.{raw_v[2]}.{raw_v[3:]}"
     else:
         kb_version = "未知"
+        fetch_failures += 1
 
     html_links += f'    <p>好游快爆: <a href="{kb_real_url}">v{kb_version}</a> (文件名参考: {kb_filename})</p>\n'
     print(f"好游快爆 抓取成功: v{kb_version}")
 except Exception as e:
     print(f"好游快爆 抓取报错: {e}")
+    fetch_failures += 1
 
 # ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
 try:
@@ -259,6 +271,8 @@ try:
             match = re.search(r'[vV](\d+\.\d+\.\d+)', body_content)
 
         ch_version = match.group(1) if match else "未知"
+        if ch_version == "未知":
+            fetch_failures += 1
 
     # 缝合：用抓到的版本号，配上官方的静态下载直链
     ch_download_url = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
@@ -267,6 +281,7 @@ try:
 
 except Exception as e:
     print(f"CHelper 网页抓取报错: {e}")
+    fetch_failures += 1
 
     
 # ================= 组装并写入 HTML =================
@@ -280,6 +295,16 @@ html_content = f"""<!DOCTYPE html>
 </html>
 """
 
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
+# index.html 只在 GitHub Actions 自动更新或显式加 --write 参数时生成，本地运行不写文件
+write_allowed = "--write" in sys.argv or os.environ.get("GITHUB_ACTIONS") == "true"
+
+if fetch_failures > 0:
+    print(f"本次有 {fetch_failures} 个应用抓取失败，保留上一次的 index.html 结果，不生成新文件")
+elif write_allowed:
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print("已生成 index.html")
+else:
+    print("本地运行不生成 index.html（仅 GitHub Actions 自动更新或加 --write 参数时生成）")
+
 

@@ -27,7 +27,7 @@ jobs:
           pip install requests
 
       - name: 4. 运行爬虫脚本
-        run: python update_source.py
+        run: python update_source.py --write
 
       - name: 5. 提交并推送更新
         run: |

@@ -20,7 +20,8 @@
 
 - `update_source.py` 依次抓取各应用的官方下载链接和版本号，生成 `index.html`。
 - 每次运行都会实时查询官方渠道，确保拿到最新版本。
-- 单个应用抓取失败不会影响其他应用，失败项只输出错误信息。
+- 单个应用抓取失败不会影响其他应用，失败项只输出错误信息；
+- 若本次有应用抓取失败，则不会生成新的 `index.html`，而是保留上一次成功的结果。
 
 ## 自动更新
 
@@ -39,7 +40,13 @@ pip install requests
 python update_source.py
 ```
 
-运行后会在仓库根目录重新生成 `index.html`。
+本地运行只输出各应用的抓取结果，不会在本地生成 `index.html`；`index.html` 由 GitHub Actions 自动更新时生成并提交到 GitHub。
+
+如需在本地强制生成，可以加 `--write` 参数：
+
+```bash
+python update_source.py --write
+```
 
 ## 在 Obtainium 中使用
 
