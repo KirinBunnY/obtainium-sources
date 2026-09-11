@@ -1,26 +1,132 @@
+"""抓取各应用官方下载源，生成 Obtainium 自定义源页面。
+
+本地运行时默认只打印抓取结果，不写文件；加 --write 参数或运行在 GitHub
+Actions 中才写入输出文件。只要有一个来源抓取失败，就不写文件并返回非 0
+退出码：自动任务会因此变红提醒，同时上一次成功生成的 index.html 保持不动。
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
 import os
-import requests
-import re
 import random
+import re
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+from typing import Callable, Sequence
+
+import requests
+import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+HEADERS = {"User-Agent": USER_AGENT}
 
 DEFAULT_TIMEOUT = 10
 DEFAULT_RETRIES = 3
+DEFAULT_JOBS = 8
 RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
-html_links = ""
-fetch_failures = 0
+CACHE_DIRS = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+
+PAGE_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+    <h2>我的专属下载源</h2>
+{lines}
+</body>
+</html>
+"""
 
 
 class MissingLocationError(RuntimeError):
-    pass
+    """响应缺少 Location 跳转链接。"""
+
+
+@dataclass(frozen=True)
+class SourceResult:
+    """单个应用的抓取结果。"""
+
+    name: str
+    ok: bool
+    version: str = ""
+    url: str = ""
+    reference: str = ""
+    reference_label: str = "文件名参考"
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class RedirectSource:
+    """通过 302 跳转获取下载地址的来源。"""
+
+    name: str
+    api: str
+    version_pattern: str = r"_([a-zA-Z0-9\.\-]+)\.apk"
+    version_transform: Callable[[str], str] | None = None
+    url_override: str | None = None
+
+
+REDIRECT_SOURCES = (
+    RedirectSource(
+        "原神",
+        "https://ys-api.mihoyo.com/event/download_porter/link/ys_cn/official/android_default",
+    ),
+    RedirectSource(
+        "云·原神",
+        "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web",
+    ),
+    RedirectSource(
+        "云·星穹铁道",
+        "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default",
+    ),
+    RedirectSource(
+        "云·绝区零",
+        "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame",
+    ),
+    RedirectSource(
+        "植物大战僵尸2",
+        "https://pvz2download.ditwan.cn/download-service/baokai",
+        version_pattern=r"baokai_([\d\.]+)_",
+    ),
+    RedirectSource(
+        "TapTap",
+        "https://d.taptap.cn/latest/seo-bing",
+        version_transform=lambda version: version.replace("-rel.", "-rel#"),
+        url_override="https://d.taptap.cn/latest/seo-bing#taptap_fake.apk",
+    ),
+)
+
+MIYOUSHE_API = (
+    "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
+)
+MIYOUSHE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.miyoushe.com/",
+}
+
+KUAIBAO_API = "https://d.3839.com/Cj"
+
+CHELPER_CHANGELOG_URL = "https://www.yanceymc.cn/api/chelper/CHANGELOG.md"
+CHELPER_RELEASE_NOTES_URL = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
+CHELPER_DOWNLOAD_URL = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
+
+VERSION_IN_MARKDOWN = re.compile(r"^[vV]?(\d+\.\d+\.\d+)", re.MULTILINE)
+VERSION_IN_HEADING = re.compile(r"<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)")
+VERSION_ANYWHERE = re.compile(r"[vV](\d+\.\d+\.\d+)")
 
 
 def get_retry_delay(attempt, response=None, base_delay=1.5, max_delay=8):
@@ -47,7 +153,7 @@ def get_with_retry(
     require_location=False,
     retry_ssl_errors=True,
 ):
-    request_headers = request_headers or headers
+    request_headers = request_headers or HEADERS
     last_error = None
     last_response = None
 
@@ -105,7 +211,7 @@ def get_with_retry(
 def fetch_chelper_page(url, max_retries=3):
     """CHelper 官网证书偶尔异常，只在这个站点失败后降级重试。"""
     ch_headers = {
-        **headers,
+        **HEADERS,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Connection": "close",
     }
@@ -120,7 +226,7 @@ def fetch_chelper_page(url, max_retries=3):
             retry_ssl_errors=False,
         )
     except requests.exceptions.SSLError:
-        requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+        urllib3.disable_warnings(category=InsecureRequestWarning)
         res = get_with_retry(
             "CHelper",
             url,
@@ -131,186 +237,244 @@ def fetch_chelper_page(url, max_retries=3):
         )
         print("CHelper HTTPS 校验失败，已仅对此站点关闭证书校验后重试成功")
 
-    res.encoding = 'utf-8'
+    res.encoding = "utf-8"
     return res.text
 
-# ================= 1. 米游社 (强化版：带重试逻辑 + 伪装标头) =================
-# 先定义一个专门给米游社用的加强版标头
-mys_headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Referer": "https://www.miyoushe.com/",
-    "Host": "bbs-api.miyoushe.com"
-}
 
-try:
-    mys_api = "https://bbs-api.miyoushe.com/misc/wapi/getLatestPkgVer?channel=miyousheluodi"
-    mys_res = get_with_retry("米游社", mys_api, request_headers=mys_headers)
-
-    mys_data = mys_res.json()
-    if mys_data.get('data'):
-        mys_version = mys_data['data']['version']
-        mys_url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{mys_version}_miyousheluodi.apk"
-        html_links += f'    <p>米游社: <a href="{mys_url}">v{mys_version}</a> (文件名参考: mihoyobbs)</p>\n'
-        print(f"米游社 抓取成功: v{mys_version}")
-    else:
-        print(f"米游社 响应异常: {mys_data}")
-        fetch_failures += 1
-
-except requests.exceptions.RequestException as e:
-    print(f"米游社 抓取报错: {e}")
-    fetch_failures += 1
-except Exception as e:
-    print(f"米游社 数据解析报错: {e}")
-    fetch_failures += 1
+def parse_chelper_changelog(markdown_text: str) -> str | None:
+    """从 CHANGELOG.md 里取最新版本号。"""
+    match = VERSION_IN_MARKDOWN.search(markdown_text)
+    return match.group(1) if match else None
 
 
-# ================= 2. 游戏客户端 (统一逻辑：处理302重定向 + 失败重试) =================
-games = [
-    {"name": "原神", "api": "https://ys-api.mihoyo.com/event/download_porter/link/ys_cn/official/android_default"},
-    {"name": "云·原神", "api": "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web"},
-    {"name": "云·星穹铁道", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default"},
-    {"name": "云·绝区零", "api": "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame"},
-    {"name": "植物大战僵尸2", "api": "https://pvz2download.ditwan.cn/download-service/baokai"},
-    {"name": "TapTap", "api": "https://d.taptap.cn/latest/seo-bing"}
-]
+def parse_chelper_release_notes(page_text: str) -> str | None:
+    """兜底方案：从更新日志页静态 HTML 的正文里取版本号。"""
+    body = page_text.split("</head>")[-1]
+    match = VERSION_IN_HEADING.search(body) or VERSION_ANYWHERE.search(body)
+    return match.group(1) if match else None
 
-for game in games:
+
+def fetch_miyoushe() -> SourceResult:
+    name = "米游社"
+    try:
+        res = get_with_retry(name, MIYOUSHE_API, request_headers=MIYOUSHE_HEADERS)
+        data = res.json()
+        version = (data.get("data") or {}).get("version")
+        if not version:
+            return SourceResult(name=name, ok=False, message=f"{name} 响应异常: {data}")
+
+        url = f"https://download-bbs.miyoushe.com/app/mihoyobbs_{version}_miyousheluodi.apk"
+        return SourceResult(
+            name=name,
+            ok=True,
+            version=version,
+            url=url,
+            reference="mihoyobbs",
+            message=f"{name} 抓取成功: v{version}",
+        )
+    except requests.exceptions.RequestException as e:
+        return SourceResult(name=name, ok=False, message=f"{name} 抓取报错: {e}")
+    except Exception as e:
+        return SourceResult(name=name, ok=False, message=f"{name} 数据解析报错: {e}")
+
+
+def fetch_redirect_source(spec: RedirectSource) -> SourceResult:
     try:
         res = get_with_retry(
-            game["name"],
-            game["api"],
+            spec.name,
+            spec.api,
             allow_redirects=False,
             require_location=True,
         )
-        real_url = res.headers['Location']
-        filename = real_url.split('/')[-1].split('?')[0]
-
-        # 🌟 新增：对 PVZ2 使用专属正则提取版本号
-        if game["name"] == "植物大战僵尸2":
-            # 从 baokai_4.1.3_1817... 中精准抠出 4.1.3
-            match = re.search(r'baokai_([\d\.]+)_', real_url)
-            version = match.group(1) if match else "未知"
-        else:
-            # 其他游戏保留原来的通用正则
-            match = re.search(r'_([a-zA-Z0-9\.\-]+)\.apk', real_url)
-            version = match.group(1) if match else "未知"
-
-        if version == "未知":
-            fetch_failures += 1
-        # 下面保留你原本的 TapTap 拦截逻辑
-        if game["name"] == "TapTap":
-            version = version.replace('-rel.', '-rel#')
-            final_url = "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk"
-        else:
-            final_url = real_url
-
-        html_links += f'    <p>{game["name"]}: <a href="{final_url}">v{version}</a> (文件名参考: {filename})</p>\n'
-        print(f"{game['name']} 抓取成功: v{version}")
-
     except (requests.exceptions.RequestException, MissingLocationError) as e:
-        print(f"{game['name']} 抓取报错: {e}")
-        fetch_failures += 1
-    except Exception as e:
-        # 其他奇怪的代码错误，直接报错不重试
-        print(f"{game['name']} 发生未知报错: {e}")
-        fetch_failures += 1
+        return SourceResult(name=spec.name, ok=False, message=f"{spec.name} 抓取报错: {e}")
 
-# ================= 4. 好游快爆 (单独处理特殊包名) =================
-try:
-    # 【注意】这里请填入你刚才抓到这个 302 响应时，真正的“请求 URL (Request URL)”
-    kb_api = "https://d.3839.com/Cj" 
-    
-    # 同样禁止跳转，只抓 Location
-    kb_res = get_with_retry(
-        "好游快爆",
-        kb_api,
-        allow_redirects=False,
-        require_location=True,
+    real_url = res.headers["Location"]
+    filename = real_url.split("/")[-1].split("?")[0]
+
+    match = re.search(spec.version_pattern, real_url)
+    if not match:
+        return SourceResult(
+            name=spec.name,
+            ok=False,
+            message=f"{spec.name} 版本号解析失败: {real_url}",
+        )
+
+    version = match.group(1)
+    if spec.version_transform is not None:
+        version = spec.version_transform(version)
+
+    return SourceResult(
+        name=spec.name,
+        ok=True,
+        version=version,
+        url=spec.url_override or real_url,
+        reference=filename,
+        message=f"{spec.name} 抓取成功: v{version}",
     )
-    kb_real_url = kb_res.headers['Location']
-    kb_filename = kb_real_url.split('/')[-1].split('?')[0]
 
-    # 用正则精准提取 HYKB 后面的 6 位数字 (例如 158007)
-    match = re.search(r'HYKB(\d{6})', kb_real_url)
-    if match:
-        raw_v = match.group(1)
-        # 重新拼装成 1.5.8.007 的格式，让 Obtainium 抓得更准
-        kb_version = f"{raw_v[0]}.{raw_v[1]}.{raw_v[2]}.{raw_v[3:]}"
-    else:
-        kb_version = "未知"
-        fetch_failures += 1
 
-    html_links += f'    <p>好游快爆: <a href="{kb_real_url}">v{kb_version}</a> (文件名参考: {kb_filename})</p>\n'
-    print(f"好游快爆 抓取成功: v{kb_version}")
-except Exception as e:
-    print(f"好游快爆 抓取报错: {e}")
-    fetch_failures += 1
+def fetch_kuaibao() -> SourceResult:
+    name = "好游快爆"
+    try:
+        res = get_with_retry(name, KUAIBAO_API, allow_redirects=False, require_location=True)
+    except (requests.exceptions.RequestException, MissingLocationError) as e:
+        return SourceResult(name=name, ok=False, message=f"{name} 抓取报错: {e}")
 
-# ================= 5. CHelper (网页抓版本号 + 静态下载直链) =================
-try:
-    # CHelper 官网更新日志页是 VitePress RemoteMarkdown 组件，正文由前端 JS
-    # 从 CHANGELOG.md 异步加载，静态 HTML 里没有版本号，所以直接抓 CHANGELOG.md
-    ch_md_url = "https://www.yanceymc.cn/api/chelper/CHANGELOG.md"
-    ch_md_text = fetch_chelper_page(ch_md_url)
-    ch_md_match = re.search(r'^[vV]?(\d+\.\d+\.\d+)', ch_md_text, re.MULTILINE)
-    ch_version = ch_md_match.group(1) if ch_md_match else None
+    real_url = res.headers["Location"]
+    filename = real_url.split("/")[-1].split("?")[0]
 
-    if not ch_version:
-        # 兜底：老逻辑，从更新日志页的静态 HTML 里找版本号
-        ch_web_url = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
-        ch_web_text = fetch_chelper_page(ch_web_url)
+    match = re.search(r"HYKB(\d{6})", real_url)
+    if not match:
+        return SourceResult(
+            name=name,
+            ok=False,
+            message=f"{name} 版本号解析失败: {real_url}",
+        )
 
-        # 规矩1：一刀切断！把网页按 </head> 劈开，我们只在后半截（正文）里找
-        body_content = ch_web_text.split('</head>')[-1]
+    # 文件名里的 HYKB 后 6 位数字还原成 x.y.z.build，便于 Obtainium 比较版本
+    digits = match.group(1)
+    version = f"{digits[0]}.{digits[1]}.{digits[2]}.{digits[3:]}"
+    return SourceResult(
+        name=name,
+        ok=True,
+        version=version,
+        url=real_url,
+        reference=filename,
+        message=f"{name} 抓取成功: v{version}",
+    )
 
-        # 规矩2：精准狙击标题！只寻找 <h1>, <h2> 或 <h3> 开头紧跟着的版本号
-        # [^>]* 是为了兼容 VitePress 自动生成的 id 和 class，比如 <h2 id="v1-5-2">
-        match = re.search(r'<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)', body_content)
 
-        # 如果标题里没找到（作者可能没用标题），再用兜底方案在正文里盲抓一次
-        if not match:
-            match = re.search(r'[vV](\d+\.\d+\.\d+)', body_content)
+def fetch_chelper() -> SourceResult:
+    name = "CHelper"
+    try:
+        version = parse_chelper_changelog(fetch_chelper_page(CHELPER_CHANGELOG_URL))
+        if not version:
+            version = parse_chelper_release_notes(fetch_chelper_page(CHELPER_RELEASE_NOTES_URL))
 
-        ch_version = match.group(1) if match else "未知"
-        if ch_version == "未知":
-            fetch_failures += 1
+        if not version:
+            return SourceResult(name=name, ok=False, message=f"{name} 版本号解析失败")
 
-    # 缝合：用抓到的版本号，配上官方的静态下载直链
-    ch_download_url = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
-    html_links += f'    <p>CHelper: <a href="{ch_download_url}">v{ch_version}</a> (识别标识: chelper)</p>\n'
-    print(f"CHelper 网页抓取成功: v{ch_version}")
+        return SourceResult(
+            name=name,
+            ok=True,
+            version=version,
+            url=CHELPER_DOWNLOAD_URL,
+            reference="chelper",
+            reference_label="识别标识",
+            message=f"{name} 网页抓取成功: v{version}",
+        )
+    except Exception as e:
+        return SourceResult(name=name, ok=False, message=f"{name} 网页抓取报错: {e}")
 
-except Exception as e:
-    print(f"CHelper 网页抓取报错: {e}")
-    fetch_failures += 1
 
-    
-# ================= 组装并写入 HTML =================
-html_content = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body>
-    <h2>我的专属下载源</h2>
-{html_links}
-</body>
-</html>
-"""
+def build_sources() -> list[tuple[str, Callable[[], SourceResult]]]:
+    """按页面输出顺序返回所有来源。"""
+    sources: list[tuple[str, Callable[[], SourceResult]]] = [("米游社", fetch_miyoushe)]
+    sources += [
+        (spec.name, partial(fetch_redirect_source, spec)) for spec in REDIRECT_SOURCES
+    ]
+    sources.append(("好游快爆", fetch_kuaibao))
+    sources.append(("CHelper", fetch_chelper))
+    return sources
 
-# index.html 只在 GitHub Actions 自动更新或显式加 --write 参数时生成，本地运行不写文件
-write_allowed = "--write" in sys.argv or os.environ.get("GITHUB_ACTIONS") == "true"
 
-if fetch_failures > 0:
-    print(f"本次有 {fetch_failures} 个应用抓取失败，保留上一次的 index.html 结果，不生成新文件")
-elif write_allowed:
-    with open("index.html", "w", encoding="utf-8") as f:
-        f.write(html_content)
-    print("已生成 index.html")
-else:
-    print("本地运行不生成 index.html（仅 GitHub Actions 自动更新或加 --write 参数时生成）")
+def _run_source(name: str, fetcher: Callable[[], SourceResult]) -> SourceResult:
+    try:
+        return fetcher()
+    except Exception as e:
+        # 单个来源的意外错误不应该影响其它来源
+        return SourceResult(name=name, ok=False, message=f"{name} 发生未知报错: {e}")
 
-# 运行结束后自动清理本目录下的缓存文件夹（如 __pycache__）
-for cache_dir in ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"):
-    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cache_dir)
-    if os.path.isdir(cache_path):
-        shutil.rmtree(cache_path, ignore_errors=True)
-        print(f"已清理缓存文件夹: {cache_dir}")
+
+def fetch_all(jobs: int = DEFAULT_JOBS) -> list[SourceResult]:
+    """并发抓取全部来源，返回顺序与 build_sources 一致。"""
+    sources = build_sources()
+    workers = max(1, min(jobs, len(sources)))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            (name, pool.submit(_run_source, name, fetcher)) for name, fetcher in sources
+        ]
+        return [future.result() for _, future in futures]
+
+
+def render_line(result: SourceResult) -> str:
+    name = html.escape(result.name)
+    url = html.escape(result.url, quote=True)
+    version = html.escape(result.version)
+    reference = html.escape(result.reference)
+    return (
+        f'    <p>{name}: <a href="{url}">v{version}</a> '
+        f"({result.reference_label}: {reference})</p>"
+    )
+
+
+def render_page(results: Sequence[SourceResult]) -> str:
+    lines = "".join(f"{render_line(result)}\n" for result in results if result.ok)
+    return PAGE_TEMPLATE.format(lines=lines)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="抓取应用下载源并生成 Obtainium 自定义源页面")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="允许写入输出文件，本地不加此参数时只打印结果",
+    )
+    parser.add_argument("--output", default="index.html", help="输出文件路径，默认 index.html")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=DEFAULT_JOBS,
+        help=f"并发抓取线程数，默认 {DEFAULT_JOBS}",
+    )
+    return parser.parse_args(argv)
+
+
+def write_allowed(args: argparse.Namespace) -> bool:
+    return args.write or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def cleanup_caches(base_dir: Path) -> list[str]:
+    removed = []
+    for name in CACHE_DIRS:
+        path = base_dir / name
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(name)
+    return removed
+
+
+def run(args: argparse.Namespace) -> int:
+    results = fetch_all(jobs=args.jobs)
+    for result in results:
+        print(result.message)
+
+    failures = [result for result in results if not result.ok]
+    if failures:
+        print(f"本次有 {len(failures)} 个应用抓取失败，保留上一次的 index.html 结果，不生成新文件")
+        return 1
+
+    if not write_allowed(args):
+        print("本地运行不生成 index.html（仅 GitHub Actions 自动更新或加 --write 参数时生成）")
+        return 0
+
+    output = Path(args.output)
+    with open(output, "w", encoding="utf-8", newline="\n") as f:
+        f.write(render_page(results))
+    print(f"已生成 {output}")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        return run(args)
+    finally:
+        for name in cleanup_caches(Path(__file__).resolve().parent):
+            print(f"已清理缓存文件夹: {name}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
