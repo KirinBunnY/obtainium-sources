@@ -14,6 +14,7 @@ import random
 import re
 import shutil
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -404,9 +405,10 @@ def render_line(result: SourceResult) -> str:
     url = html.escape(result.url, quote=True)
     version = html.escape(result.version)
     reference = html.escape(result.reference)
+    reference_label = html.escape(result.reference_label)
     return (
         f'    <p>{name}: <a href="{url}">v{version}</a> '
-        f"({result.reference_label}: {reference})</p>"
+        f"({reference_label}: {reference})</p>"
     )
 
 
@@ -446,6 +448,33 @@ def cleanup_caches(base_dir: Path) -> list[str]:
     return removed
 
 
+def write_page(output: Path, content: str) -> None:
+    """Create parent directories and atomically replace the output file."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+            temporary_path = Path(temporary_file.name)
+
+        temporary_path.replace(output)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def run(args: argparse.Namespace) -> int:
     results = fetch_all(jobs=args.jobs)
     for result in results:
@@ -461,8 +490,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     output = Path(args.output)
-    with open(output, "w", encoding="utf-8", newline="\n") as f:
-        f.write(render_page(results))
+    write_page(output, render_page(results))
     print(f"已生成 {output}")
     return 0
 

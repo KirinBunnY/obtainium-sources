@@ -218,6 +218,7 @@ def test_render_page_escapes_untrusted_values():
             version="1.0",
             url='https://example.com/a.apk?a=1&b="2"',
             reference="a.apk",
+            reference_label="文件名<参考>",
         )
     ]
 
@@ -227,6 +228,7 @@ def test_render_page_escapes_untrusted_values():
     assert "&quot;" in page
     assert 'a=1&amp;b=&quot;2&quot;' in page
     assert '"2"' not in page
+    assert "文件名&lt;参考&gt;" in page
     assert page.count("<p>") == 1
 
 
@@ -331,6 +333,35 @@ def test_main_writes_output_when_all_sources_succeed(monkeypatch, tmp_path):
 
     assert code == 0
     assert output.read_text(encoding="utf-8") == us.render_page(results)
+
+
+def test_main_creates_output_parent_directories(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(us, "cleanup_caches", lambda base_dir: [])
+    results = [us.SourceResult(name="米游社", ok=True, version="1.0.0")]
+    monkeypatch.setattr(us, "fetch_all", lambda *args, **kwargs: results)
+    output = tmp_path / "nested" / "build" / "index.html"
+
+    code = us.main(["--write", "--output", str(output)])
+
+    assert code == 0
+    assert output.read_text(encoding="utf-8") == us.render_page(results)
+
+
+def test_write_page_keeps_old_file_when_replace_fails(monkeypatch, tmp_path):
+    output = tmp_path / "index.html"
+    output.write_text("旧内容", encoding="utf-8")
+
+    def fail_replace(self, target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(us.Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        us.write_page(output, "新内容")
+
+    assert output.read_text(encoding="utf-8") == "旧内容"
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_main_skips_write_without_flag(monkeypatch, tmp_path):
