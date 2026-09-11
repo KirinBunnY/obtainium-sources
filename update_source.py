@@ -2,6 +2,7 @@ import os
 import requests
 import re
 import random
+import shutil
 import sys
 import time
 from urllib3.exceptions import InsecureRequestWarning
@@ -307,4 +308,9 @@ elif write_allowed:
 else:
     print("本地运行不生成 index.html（仅 GitHub Actions 自动更新或加 --write 参数时生成）")
 
-
+# 运行结束后自动清理本目录下的缓存文件夹（如 __pycache__）
+for cache_dir in ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"):
+    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cache_dir)
+    if os.path.isdir(cache_path):
+        shutil.rmtree(cache_path, ignore_errors=True)
+        print(f"已清理缓存文件夹: {cache_dir}")
