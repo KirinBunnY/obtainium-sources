@@ -48,7 +48,9 @@ HEADERS = {"User-Agent": USER_AGENT}
 DEFAULT_TIMEOUT = 10
 DEFAULT_RETRIES = 3
 DEFAULT_JOBS = 8
-DEFAULT_BUDGET = 60
+# 这些接口在 GitHub 运行器上时快时慢，历史观测横跨 13 秒到 191 秒：
+# 预算只用于兜住「真的卡死」，必须明显高于最慢的正常运行。
+DEFAULT_BUDGET = 180
 MAX_BUDGET = 600
 BACKOFF_BASE = 1.5
 BACKOFF_MAX = 8
@@ -118,6 +120,7 @@ class SourceResult:
     reference_label: str = "文件名参考"
     fetched_at: str = ""
     stale: bool = False
+    duration_ms: int = 0
     message: str = ""
 
 
@@ -584,11 +587,13 @@ def build_sources() -> list[tuple[str, Callable[[], SourceResult]]]:
 
 
 def _run_source(name: str, fetcher: Callable[[], SourceResult]) -> SourceResult:
+    started = time.monotonic()
     try:
-        return fetcher()
+        result = fetcher()
     except Exception as e:
         # 单个来源的意外错误不应该影响其它来源
-        return SourceResult(name=name, ok=False, message=f"{name} 发生未知报错: {e}")
+        result = SourceResult(name=name, ok=False, message=f"{name} 发生未知报错: {e}")
+    return replace(result, duration_ms=int((time.monotonic() - started) * 1000))
 
 
 def _run_with_deadline(name, fetcher, started):
@@ -925,7 +930,7 @@ def status_snapshot(results: Sequence[SourceResult], generated_at: str, publishe
     """本轮抓取结果的机器可读快照，供 CI 生成摘要，不参与页面渲染。
 
     记录的是原始抓取结果（而不是合并后的页面内容），这样某次降级是「哪个
-    来源真的坏了」一眼可见。
+    来源真的坏了」一眼可见；带上的耗时用于区分「接口慢」和「接口坏了」。
     """
     return {
         "_version": 1,
@@ -938,6 +943,7 @@ def status_snapshot(results: Sequence[SourceResult], generated_at: str, publishe
                 "stale": result.stale,
                 "version": result.version,
                 "url": result.url,
+                "duration_ms": result.duration_ms,
                 "message": result.message,
             }
             for result in results
@@ -1002,6 +1008,13 @@ def run(args: argparse.Namespace) -> int:
         print(f"已生成 {output}（{len(stale)} 个来源沿用上次成功值：{'、'.join(stale)}）")
     else:
         print(f"已生成 {output}")
+
+    if failures and not any(result.ok for result in results):
+        # 最容易误判的一种情况：页面「看起来更新了」，其实一个来源都没抓到
+        print(
+            f"警告: 本轮 {len(failures)} 个来源全部抓取失败，"
+            f"页面内容全部来自上一次成功值，没有任何新数据"
+        )
 
     if stale or failures:
         on_page = {result.name for result in merged}

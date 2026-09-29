@@ -21,7 +21,7 @@
 - `update_source.py` 并发抓取各应用的官方下载链接和版本号，再按固定顺序生成 `index.html`。
 - 每次运行都会实时查询官方渠道，确保拿到最新版本。
 - 单个应用抓取失败不会影响其他应用。
-- 网络层共用一个 `requests.Session` 连接池，重试与退避交给 urllib3 的 `Retry` 策略；每轮抓取有总预算（默认 60 秒，`--budget` 可调），不会因为某个来源卡住而无限等待。
+- 网络层共用一个 `requests.Session` 连接池，重试与退避交给 urllib3 的 `Retry` 策略；每轮抓取有总预算（默认 180 秒，`--budget` 可调），不会因为某个来源卡住而无限等待。预算刻意放得比最慢的正常运行还宽：这些国内接口在 GitHub 运行器上时快时慢，历史耗时横跨 13 秒到 191 秒，把预算压到 60 秒曾让一次本可成功的运行被整轮判死。
 - 版本号必须匹配该来源的格式（例如 `7.0.0`）；解析出来的值格式不符时会明确报错，而不是把残缺版本号写进页面。
 - 运行结束后会自动清理本地生成的缓存文件夹（如 `__pycache__`），用 `--no-cleanup` 可关闭。
 
@@ -34,6 +34,8 @@
 3. 只有「一个来源都没成功、且没有任何可沿用的历史值」时才不生成页面，保留上一次的 `index.html`。
 
 如果状态文件丢失，脚本会退回到从现有 `index.html` 反推上次成功值（兼容没有 `data-*` 属性的旧页面），所以兜底能力不会因为一次误删而失效。
+
+⚠️ 注意一种容易被误读的情况：**本轮所有来源都失败时，页面仍会被提交**（内容全是上一次成功值），提交看起来是正常的。因此脚本在这种情况下会额外打印一行「全部抓取失败……没有任何新数据」，CI 摘要也会用加粗警告写明，`sources-status.json` 里每个来源都带 `duration_ms`，便于区分「接口慢」和「接口坏了」。
 
 退出码：
 
@@ -76,7 +78,7 @@ python update_source.py --write                      # 允许写入文件
 python update_source.py --output build/index.html    # 指定输出路径，默认 index.html
 python update_source.py --state sources-last-good.json  # 上次成功结果记录，默认同名文件
 python update_source.py --jobs 4                     # 调整并发线程数，默认 8
-python update_source.py --budget 30                  # 整轮抓取总预算（秒），默认 60
+python update_source.py --budget 30                  # 整轮抓取总预算（秒），默认 180
 python update_source.py --strict                     # 任一来源失败即返回 2
 python update_source.py --no-cleanup                 # 不清理缓存目录，便于反复运行
 ```

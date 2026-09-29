@@ -939,6 +939,60 @@ def test_main_does_not_clean_caches(monkeypatch, tmp_path):
     assert calls == []
 
 
+def test_status_snapshot_records_duration_and_published_flag(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(us, "fetch_all", lambda *args, **kwargs: [sample_result()])
+    status = tmp_path / "status.json"
+
+    us.main(run_args(tmp_path))
+
+    snapshot = json.loads(status.read_text(encoding="utf-8"))
+    assert snapshot["published"] is True
+    assert isinstance(snapshot["sources"][0]["duration_ms"], int)
+
+
+def test_run_warns_when_every_source_falls_back(monkeypatch, tmp_path, capsys):
+    """提交是绿的但页面全是旧数据——这种最容易被误读的情况必须显式警告。"""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    state = tmp_path / "state.json"
+    write_state(state, {"原神": {"url": "https://example.com/a.apk", "version": "7.0.0"}})
+    monkeypatch.setattr(
+        us,
+        "fetch_all",
+        lambda *args, **kwargs: [us.SourceResult(name="原神", ok=False, message="原神 抓取报错")],
+    )
+
+    code = us.main(run_args(tmp_path))
+
+    out = capsys.readouterr().out
+    assert code == us.EXIT_DEGRADED
+    assert "全部抓取失败" in out
+    assert "没有任何新数据" in out
+
+
+def test_run_does_not_warn_when_at_least_one_source_is_fresh(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    state = tmp_path / "state.json"
+    write_state(state, {"原神": {"url": "https://example.com/a.apk", "version": "7.0.0"}})
+    monkeypatch.setattr(
+        us,
+        "fetch_all",
+        lambda *args, **kwargs: [
+            sample_result(),
+            us.SourceResult(name="原神", ok=False, message="原神 抓取报错"),
+        ],
+    )
+
+    us.main(run_args(tmp_path))
+
+    assert "全部抓取失败" not in capsys.readouterr().out
+
+
+def test_default_budget_is_generous_enough_for_slow_runners():
+    """历史观测里成功运行最慢约 191 秒，预算必须高于它，否则会把正常运行判死。"""
+    assert us.DEFAULT_BUDGET >= 180
+
+
 def test_status_snapshot_is_written_for_ci_summary(monkeypatch, tmp_path):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(

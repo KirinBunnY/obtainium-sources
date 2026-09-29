@@ -80,20 +80,35 @@ jobs:
               sources = data.get("sources", [])
               broken = [s for s in sources if not s.get("ok")]
               stale = [s for s in sources if s.get("ok") and s.get("stale")]
+              fresh = [s for s in sources if s.get("ok") and not s.get("stale")]
 
               if not broken:
                   lines.append(f"全部 {len(sources)} 个来源抓取成功。")
+              elif data.get("published") and not fresh:
+                  # 最容易被误读的情况：提交是绿的，但页面里全是上一轮的数据
+                  lines.append(
+                      f"**页面虽然已提交，但 {len(sources)} 个来源本轮全部抓取失败，"
+                      f"内容全部是上一次成功值，没有任何新数据。**"
+                  )
+                  lines.append("")
+                  lines.append("| 来源 | 耗时 | 情况 |")
+                  lines.append("| --- | --- | --- |")
+                  for item in broken:
+                      message = str(item.get("message", "")).replace("|", "\\|")
+                      ms = item.get("duration_ms") or 0
+                      lines.append(f"| {item.get('name')} | {ms / 1000:.1f}s | {message} |")
               else:
                   if data.get("published"):
                       lines.append(f"页面已发布，其中 {len(stale)} 个来源沿用上次成功值。")
                   else:
                       lines.append("页面未更新：没有可用来源，也没有可沿用的历史值。")
                   lines.append("")
-                  lines.append("| 来源 | 情况 |")
-                  lines.append("| --- | --- |")
+                  lines.append("| 来源 | 耗时 | 情况 |")
+                  lines.append("| --- | --- | --- |")
                   for item in broken:
                       message = str(item.get("message", "")).replace("|", "\\|")
-                      lines.append(f"| {item.get('name')} | {message} |")
+                      ms = item.get("duration_ms") or 0
+                      lines.append(f"| {item.get('name')} | {ms / 1000:.1f}s | {message} |")
 
           lines.append("")
           with summary.open("a", encoding="utf-8") as handle:
