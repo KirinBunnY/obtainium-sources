@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+build/
+# 每轮运行覆盖的结果快照，只用于 CI 摘要，不需要入库
+sources-status.json
