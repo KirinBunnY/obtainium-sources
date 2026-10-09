@@ -1,69 +1,69 @@
 {
   "_version": 1,
-  "updated_at": "2026-10-08T02:08:20+00:00",
+  "updated_at": "2026-10-09T02:20:36+00:00",
   "entries": {
     "米游社": {
       "version": "2.116.0",
       "url": "https://download-bbs.miyoushe.com/app/mihoyobbs_2.116.0_miyousheluodi.apk",
       "reference": "mihoyobbs",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:13+00:00"
+      "fetched_at": "2026-10-09T02:20:29+00:00"
     },
     "原神": {
       "version": "7.1.0",
       "url": "https://autopatchcn.yuanshen.com/client_app/download/Android/20260915143557_znpK0stDcvvXlIk8/mihoyo/yuanshen_7.1.0.apk",
       "reference": "yuanshen_7.1.0.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:14+00:00"
+      "fetched_at": "2026-10-09T02:20:30+00:00"
     },
     "云·原神": {
       "version": "7.1.0",
       "url": "https://autopatchcn.yuanshen.com/client_app/download/cloudgame/android/20260915172349_NN90jMXt4DSR1ST0/cyydweb/yscloud_7.1.0.apk",
       "reference": "yscloud_7.1.0.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:15+00:00"
+      "fetched_at": "2026-10-09T02:20:32+00:00"
     },
     "云·星穹铁道": {
       "version": "4.6.0",
       "url": "https://autopatchcn.bhsr.com/client/cn/20260916161237_92YouE5wF5gNN9lU/gw_An_C/StarRailCloud_4.6.0.apk",
       "reference": "StarRailCloud_4.6.0.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:16+00:00"
+      "fetched_at": "2026-10-09T02:20:33+00:00"
     },
     "云·绝区零": {
       "version": "3.2",
       "url": "https://autopatchcn.juequling.com/package_download/op/client_app/download/20260825154650_b7RjjbpN0Ns8FmPW/cweb_C/ZenlessZoneZeroCloud_3.2.apk",
       "reference": "ZenlessZoneZeroCloud_3.2.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:16+00:00"
+      "fetched_at": "2026-10-09T02:20:33+00:00"
     },
     "植物大战僵尸2": {
       "version": "4.2.4",
       "url": "https://pvz2apk-cdn.hrgame.com.cn/1875/baokai_4.2.4_1875_693_dj2.0-4.0.0.apk",
       "reference": "baokai_4.2.4_1875_693_dj2.0-4.0.0.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:17+00:00"
+      "fetched_at": "2026-10-09T02:20:34+00:00"
     },
     "TapTap": {
       "version": "2.96.13-rel#100300",
       "url": "https://d.taptap.cn/latest/seo-bing#taptap_fake.apk",
       "reference": "taptap_2.96.13-rel.100300.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:18+00:00"
+      "fetched_at": "2026-10-09T02:20:35+00:00"
     },
     "好游快爆": {
       "version": "1.5.8.204",
       "url": "https://d.3839app.net/video/hykb/HYKB15820420260819wap1.apk",
       "reference": "HYKB15820420260819wap1.apk",
       "reference_label": "文件名参考",
-      "fetched_at": "2026-10-08T02:08:18+00:00"
+      "fetched_at": "2026-10-09T02:20:35+00:00"
     },
     "CHelper": {
       "version": "26.1.0",
       "url": "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk",
       "reference": "chelper",
       "reference_label": "识别标识",
-      "fetched_at": "2026-10-08T02:08:20+00:00"
+      "fetched_at": "2026-10-09T02:20:36+00:00"
     }
   }
 }
