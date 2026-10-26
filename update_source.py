@@ -573,7 +573,11 @@ def parse_announcement_release(payload: Mapping, short_version: str) -> str:
 
 
 def fetch_official_release_at(game: str, version: str) -> str:
-    """抓官方公告里的版本更新时间；失败或找不到时返回空。"""
+    """抓官方公告里的版本更新时间；失败或找不到时返回空。
+
+    只在主抓取完成后 best-effort 调用：公告接口慢或不可达时，
+    只丢发行时间，绝不影响链接与版本。
+    """
     short_version = ".".join(version.split(".")[:2])
     key = (game, short_version)
     with _official_release_lock:
@@ -585,7 +589,7 @@ def fetch_official_release_at(game: str, version: str) -> str:
     if spec is not None:
         url = spec["api"] + "?" + urlencode(spec["params"])
         try:
-            res = get_with_retry(f"{game} 公告", url, timeout=15)
+            res = get_with_retry(f"{game} 公告", url, timeout=8, max_retries=1)
             payload = (res.json() or {}).get("data") or {}
             result = parse_announcement_release(payload, short_version)
         except Exception as e:  # 公告接口不可用时只保留构建时间
@@ -594,6 +598,21 @@ def fetch_official_release_at(game: str, version: str) -> str:
     with _official_release_lock:
         _official_release_cache[key] = result
     return result
+
+
+def attach_official_releases(results: Sequence[SourceResult]) -> list[SourceResult]:
+    """主抓取完成后，best-effort 补上米哈游系的官方发行时间。"""
+    specs = {spec.name: spec for spec in REDIRECT_SOURCES}
+    updated: list[SourceResult] = []
+    for result in results:
+        spec = specs.get(result.name)
+        if not result.ok or spec is None or not spec.announcement_game:
+            updated.append(result)
+            continue
+
+        released = fetch_official_release_at(spec.announcement_game, result.version)
+        updated.append(replace(result, released_at=released) if released else result)
+    return updated
 
 
 def fetch_miyoushe() -> SourceResult:
@@ -658,9 +677,6 @@ def fetch_redirect_source(spec: RedirectSource) -> SourceResult:
         )
 
     built_at = mihoyo_released_at(real_url)
-    released_at = ""
-    if spec.announcement_game:
-        released_at = fetch_official_release_at(spec.announcement_game, version)
 
     return SourceResult(
         name=spec.name,
@@ -670,7 +686,6 @@ def fetch_redirect_source(spec: RedirectSource) -> SourceResult:
         reference=filename,
         reference_label=spec.reference_label,
         fetched_at=now_iso(),
-        released_at=released_at,
         built_at=built_at,
         message=f"{spec.name} 抓取成功: v{version}",
     )
@@ -1172,6 +1187,8 @@ def run(args: argparse.Namespace) -> int:
     status_path = Path(args.status)
 
     results = fetch_all(jobs=normalize_jobs(args.jobs), deadline=normalize_budget(args.budget))
+    # 公告接口只用来补「发行时间」，放在主抓取之后，失败也不影响链接与版本
+    results = attach_official_releases(results)
     for result in results:
         print(result.message)
 

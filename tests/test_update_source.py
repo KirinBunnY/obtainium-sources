@@ -113,7 +113,6 @@ def run_args(tmp_path, *extra):
 
 def test_redirect_source_parses_version_and_reference(monkeypatch):
     patch_location(monkeypatch, YUANSHEN_LOCATION)
-    monkeypatch.setattr(us, "fetch_official_release_at", lambda game, version: "")
 
     result = us.fetch_redirect_source(redirect_source("原神"))
 
@@ -132,21 +131,42 @@ def test_redirect_source_parses_version_and_reference(monkeypatch):
     )
 
 
-def test_redirect_source_keeps_official_release_and_build_time(monkeypatch):
-    patch_location(monkeypatch, YUANSHEN_LOCATION)
+def test_attach_official_releases_sets_release_time(monkeypatch):
     monkeypatch.setattr(
         us,
         "fetch_official_release_at",
         lambda game, version: "2026-09-23T07:00:00+08:00",
     )
+    result = us.SourceResult(
+        name="原神",
+        ok=True,
+        version="7.0.0",
+        url=YUANSHEN_LOCATION,
+        built_at="2026-08-03T15:53:01+08:00",
+    )
 
-    result = us.fetch_redirect_source(redirect_source("原神"))
+    updated = us.attach_official_releases([result])
 
-    assert result.released_at == "2026-09-23T07:00:00+08:00"
-    assert result.built_at == "2026-08-03T15:53:01+08:00"
-    line = us.render_line(result)
+    assert updated[0].released_at == "2026-09-23T07:00:00+08:00"
+    assert updated[0].built_at == "2026-08-03T15:53:01+08:00"
+    line = us.render_line(updated[0])
     assert " 发行: 2026-09-23 07:00:00" in line
     assert " 构建: 2026-08-03 15:53:01" in line
+
+
+def test_attach_official_releases_keeps_result_when_unavailable(monkeypatch):
+    monkeypatch.setattr(us, "fetch_official_release_at", lambda game, version: "")
+    result = us.SourceResult(
+        name="原神",
+        ok=True,
+        version="7.0.0",
+        built_at="2026-08-03T15:53:01+08:00",
+    )
+
+    updated = us.attach_official_releases([result])
+
+    assert updated[0].released_at == ""
+    assert updated[0].built_at == "2026-08-03T15:53:01+08:00"
 
 
 def test_pvz2_uses_its_own_version_pattern(monkeypatch):
