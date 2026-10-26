@@ -4,6 +4,7 @@ import json
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -496,7 +497,8 @@ def test_render_page_marks_and_summarizes_fallbacks():
 
     assert "同步时间：2026-09-12T06:31:00+08:00" in page
     assert "1 个来源沿用上次成功值：原神" in page
-    assert "[沿用 2026-09-10 06:30]" in page
+    expected_stale = us.describe_fetched_at("2026-09-10T06:30:00+08:00")
+    assert f"[沿用 {expected_stale}]" in page
     assert 'data-source="原神" data-fetched-at="2026-09-10T06:30:00+08:00"' in page
     # 新增的只是属性与状态字，链接与括号内容保持原样
     assert '原神: <a href="https://example.com/yuanshen_7.0.0.apk">v7.0.0</a>' in page
@@ -516,7 +518,13 @@ def test_stale_marker_without_timestamp_says_so():
 
     assert "[沿用 上次成功值]" in us.render_line(entry)
     assert us.describe_fetched_at("") == "上次成功值"
-    assert us.describe_fetched_at("2026-09-10T06:30:00+08:00") == "2026-09-10 06:30"
+    # 显示时会转成本地时区，所以不能写死某个时区的墙钟时间
+    expected = (
+        datetime.fromisoformat("2026-09-10T06:30:00+08:00")
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M")
+    )
+    assert us.describe_fetched_at("2026-09-10T06:30:00+08:00") == expected
 
 
 def test_render_line_shows_release_date_only_when_known():
@@ -1046,7 +1054,8 @@ def test_main_publishes_page_when_one_source_fails(monkeypatch, tmp_path):
     page = output.read_text(encoding="utf-8")
     assert "v2.116.0" in page
     assert "v7.0.0" in page
-    assert "[沿用 2026-09-10 06:30]" in page
+    expected_stale = us.describe_fetched_at("2026-09-10T06:30:00+08:00")
+    assert f"[沿用 {expected_stale}]" in page
 
 
 def test_main_refuses_to_write_when_no_source_succeeds(monkeypatch, tmp_path):
