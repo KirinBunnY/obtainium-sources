@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
+from urllib.parse import urlencode
 
 import requests
 import urllib3
@@ -92,12 +93,25 @@ PAGE_LINE_PATTERN = re.compile(
     r"<p\b[^>]*>\s*(?P<name>[^:<]*?):\s*"
     r"<a href=\"(?P<url>[^\"]*)\">v(?P<version>[^<]*)</a>"
     r"\s*\((?P<reference_label>[^:：]*)[:：]\s*(?P<reference>[^)]*)\)"
+    r"(?:\s*发行[:：]\s*(?P<released_at>\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?))?"
+    r"(?:\s*构建[:：]\s*(?P<built_at>\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?))?"
     r"(?P<stale>[^<]*)</p>",
     re.DOTALL,
 )
 PAGE_SOURCE_PATTERN = re.compile(r'<p\b[^>]*data-source="(?P<source>[^"]*)"[^>]*>')
 PAGE_FETCHED_PATTERN = re.compile(r'data-fetched-at="(?P<fetched>[^"]*)"')
 APK_NAME_PATTERN = re.compile(r"^[^/?#]+\.apk$", re.IGNORECASE)
+
+# 发行日期只能从部分来源的链接里直接取到：
+#   米哈游系：下载地址里的 14 位构建时间戳，如 /20260915143557_xxxx/
+#   好游快爆：文件名里的 8 位日期，如 HYKB15820420260819wap1.apk
+MIHOYO_RELEASE_PATTERN = re.compile(
+    r"/(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"
+    r"(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})_[A-Za-z0-9]+"
+)
+KUAIBAO_RELEASE_PATTERN = re.compile(
+    r"HYKB\d{6}(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"
+)
 
 
 class MissingLocationError(RuntimeError):
@@ -119,6 +133,10 @@ class SourceResult:
     reference: str = ""
     reference_label: str = "文件名参考"
     fetched_at: str = ""
+    # 官方发行时间（ISO 8601）：来自公告接口或更新日志
+    released_at: str = ""
+    # 安装包构建/上传时间（ISO 8601）：来自下载链接里的时间戳
+    built_at: str = ""
     stale: bool = False
     duration_ms: int = 0
     message: str = ""
@@ -138,24 +156,30 @@ class RedirectSource:
     # 仅在确有不兼容的老站点上显式关闭；关闭时每次都会打印告警
     verify: bool = True
     retries: int = DEFAULT_RETRIES
+    # 对应官方公告的游戏标识；有值时会去抓「版本更新说明」的发布时间
+    announcement_game: str | None = None
 
 
 REDIRECT_SOURCES = (
     RedirectSource(
         "原神",
         "https://ys-api.mihoyo.com/event/download_porter/link/ys_cn/official/android_default",
+        announcement_game="hk4e",
     ),
     RedirectSource(
         "云·原神",
         "https://api-takumi.mihoyo.com/event/download_porter/link/clgm_cn/official/android_web",
+        announcement_game="hk4e",
     ),
     RedirectSource(
         "云·星穹铁道",
         "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_hkrpg-cn/official/android_default",
+        announcement_game="hkrpg",
     ),
     RedirectSource(
         "云·绝区零",
         "https://act-api-takumi.mihoyo.com/event/download_porter/link/clgm_nap-cn/official/android_cloudgame",
+        announcement_game="nap",
     ),
     RedirectSource(
         "植物大战僵尸2",
@@ -183,18 +207,66 @@ MIYOUSHE_HEADERS = {
 
 KUAIBAO_API = "https://d.3839.com/Cj"
 
+# 官方公告接口：getAnnList 不需要签名，直接返回各分类的公告列表。
+# timezone 字段为 8，即公告时间都是北京时间。
+ANNOUNCEMENT_SOURCES = {
+    "hk4e": {
+        "api": "https://hk4e-api.mihoyo.com/common/hk4e_cn/announcement/api/getAnnList",
+        "params": {
+            "game": "hk4e",
+            "game_biz": "hk4e_cn",
+            "lang": "zh-cn",
+            "bundle_id": "hk4e_cn",
+            "platform": "pc",
+            "region": "cn_gf01",
+            "level": "60",
+            "uid": "100000000",
+        },
+    },
+    "hkrpg": {
+        "api": "https://hkrpg-api.mihoyo.com/common/hkrpg_cn/announcement/api/getAnnList",
+        "params": {
+            "game": "hkrpg",
+            "game_biz": "hkrpg_cn",
+            "lang": "zh-cn",
+            "bundle_id": "hkrpg_cn",
+            "platform": "pc",
+            "region": "prod_gf_cn",
+            "level": "70",
+            "uid": "100000000",
+        },
+    },
+    "nap": {
+        "api": "https://announcement-api.mihoyo.com/common/nap_cn/announcement/api/getAnnList",
+        "params": {
+            "game": "nap",
+            "game_biz": "nap_cn",
+            "lang": "zh-cn",
+            "bundle_id": "nap_cn",
+            "platform": "pc",
+            "region": "prod_gf_cn",
+            "level": "60",
+            "uid": "100000000",
+        },
+    },
+}
+
 CHELPER_CHANGELOG_URL = "https://www.yanceymc.cn/api/chelper/CHANGELOG.md"
 CHELPER_RELEASE_NOTES_URL = "https://www.yanceymc.cn/chelper_doc/chelper-release-notes"
 CHELPER_DOWNLOAD_URL = "https://www.yanceymc.cn/api/chelper/CHelper-latest.apk"
 
 VERSION_IN_MARKDOWN = re.compile(r"^[vV]?(\d+\.\d+\.\d+)", re.MULTILINE)
+CHELPER_DATE_IN_MARKDOWN = re.compile(
+    r"^[vV]?\d+\.\d+\.\d+\s+(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})",
+    re.MULTILINE,
+)
 VERSION_IN_HEADING = re.compile(r"<h[1-3][^>]*>\s*[vV]?(\d+\.\d+\.\d+)")
 VERSION_ANYWHERE = re.compile(r"[vV](\d+\.\d+\.\d+)")
 
 
 def empty_state() -> dict:
     """last-good 状态文件的空结构。"""
-    return {"_version": 1, "updated_at": "", "entries": {}}
+    return {"_version": 2, "updated_at": "", "entries": {}}
 
 
 class LockedSession(requests.Session):
@@ -404,6 +476,16 @@ def parse_chelper_changelog(markdown_text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def parse_chelper_release_date(markdown_text: str) -> str:
+    """从 CHANGELOG.md 的版本行里取日期，形如 `v26.1.0 20260828`。"""
+    match = CHELPER_DATE_IN_MARKDOWN.search(markdown_text)
+    if not match:
+        return ""
+
+    parts = match.groupdict()
+    return f"{parts['year']}-{parts['month']}-{parts['day']}"
+
+
 def parse_chelper_release_notes(page_text: str) -> str | None:
     """兜底方案：从更新日志页静态 HTML 的正文里取版本号。"""
     body = page_text.split("</head>")[-1]
@@ -420,6 +502,98 @@ def valid_version(version, pattern: str) -> bool:
     if not version:
         return False
     return re.fullmatch(f"(?:{pattern})", version) is not None
+
+
+def mihoyo_released_at(url: str) -> str:
+    """从米哈游下载地址里取构建时间戳，按北京时间转成 ISO 8601。"""
+    match = MIHOYO_RELEASE_PATTERN.search(url)
+    if not match:
+        return ""
+
+    parts = match.groupdict()
+    return (
+        f"{parts['year']}-{parts['month']}-{parts['day']}"
+        f"T{parts['hour']}:{parts['minute']}:{parts['second']}+08:00"
+    )
+
+
+def kuaibao_released_at(filename: str) -> str:
+    """从好游快爆文件名里取日期，返回 YYYY-MM-DD。"""
+    match = KUAIBAO_RELEASE_PATTERN.search(filename)
+    if not match:
+        return ""
+
+    parts = match.groupdict()
+    return f"{parts['year']}-{parts['month']}-{parts['day']}"
+
+
+def released_date(value: str) -> str:
+    """取 ISO 字符串的日期部分，用于页面展示。"""
+    return value[:10] if value else ""
+
+
+def released_time(value: str) -> str:
+    """取 ISO 字符串里的 HH:MM:SS；只有日期时返回空。"""
+    if len(value) >= 19 and value[10] in ("T", " "):
+        return value[11:19]
+    return ""
+
+
+def format_moment(value: str) -> str:
+    """把 ISO 字符串格式化成 `YYYY-MM-DD HH:MM:SS` 或 `YYYY-MM-DD`。"""
+    date = released_date(value)
+    clock = released_time(value)
+    return f"{date} {clock}" if date and clock else date
+
+
+_official_release_cache: dict[tuple[str, str], str] = {}
+_official_release_lock = threading.Lock()
+
+
+def parse_announcement_release(payload: Mapping, short_version: str) -> str:
+    """从公告接口的 data 里找「短版本号 + 更新说明/更新公告」的发布时间。"""
+    timezone_value = payload.get("timezone")
+    try:
+        offset_hours = int(timezone_value)
+    except (TypeError, ValueError):
+        offset_hours = 8
+    offset = f"{offset_hours:+03d}:00"
+
+    for category in payload.get("list") or []:
+        for item in category.get("list") or []:
+            title = re.sub(r"<[^>]+>", "", str(item.get("title") or ""))
+            if short_version not in title:
+                continue
+            if "更新说明" not in title and "更新公告" not in title:
+                continue
+            start = str(item.get("start_time") or "")
+            if start:
+                return start.replace(" ", "T") + offset
+    return ""
+
+
+def fetch_official_release_at(game: str, version: str) -> str:
+    """抓官方公告里的版本更新时间；失败或找不到时返回空。"""
+    short_version = ".".join(version.split(".")[:2])
+    key = (game, short_version)
+    with _official_release_lock:
+        if key in _official_release_cache:
+            return _official_release_cache[key]
+
+    spec = ANNOUNCEMENT_SOURCES.get(game)
+    result = ""
+    if spec is not None:
+        url = spec["api"] + "?" + urlencode(spec["params"])
+        try:
+            res = get_with_retry(f"{game} 公告", url, timeout=15)
+            payload = (res.json() or {}).get("data") or {}
+            result = parse_announcement_release(payload, short_version)
+        except Exception as e:  # 公告接口不可用时只保留构建时间
+            print(f"警告: {game} 更新公告抓取失败: {e}")
+
+    with _official_release_lock:
+        _official_release_cache[key] = result
+    return result
 
 
 def fetch_miyoushe() -> SourceResult:
@@ -483,6 +657,11 @@ def fetch_redirect_source(spec: RedirectSource) -> SourceResult:
             message=f"{spec.name} 版本号格式不符预期（{pattern}）: {version}",
         )
 
+    built_at = mihoyo_released_at(real_url)
+    released_at = ""
+    if spec.announcement_game:
+        released_at = fetch_official_release_at(spec.announcement_game, version)
+
     return SourceResult(
         name=spec.name,
         ok=True,
@@ -491,6 +670,8 @@ def fetch_redirect_source(spec: RedirectSource) -> SourceResult:
         reference=filename,
         reference_label=spec.reference_label,
         fetched_at=now_iso(),
+        released_at=released_at,
+        built_at=built_at,
         message=f"{spec.name} 抓取成功: v{version}",
     )
 
@@ -530,6 +711,7 @@ def fetch_kuaibao() -> SourceResult:
         url=real_url,
         reference=filename,
         fetched_at=now_iso(),
+        built_at=kuaibao_released_at(filename),
         message=f"{name} 抓取成功: v{version}",
     )
 
@@ -547,6 +729,7 @@ def fetch_chelper() -> SourceResult:
             print(f"警告: {changelog_warning}")
 
         version = parse_chelper_changelog(changelog)
+        released_at = parse_chelper_release_date(changelog) if version else ""
         if not version:
             notes, notes_warning = fetch_page(
                 CHELPER_RELEASE_NOTES_URL,
@@ -569,6 +752,7 @@ def fetch_chelper() -> SourceResult:
             reference="chelper",
             reference_label="识别标识",
             fetched_at=now_iso(),
+            released_at=released_at,
             message=f"{name} 网页抓取成功: v{version}",
         )
     except Exception as e:
@@ -666,6 +850,15 @@ def render_line(result: SourceResult) -> str:
     reference_label = html.escape(result.reference_label)
     source = html.escape(result.name, quote=True)
     fetched_at = html.escape(result.fetched_at, quote=True)
+    stamps = []
+    released = format_moment(result.released_at)
+    built = format_moment(result.built_at)
+    if released:
+        stamps.append(f"发行: {released}")
+    if built:
+        stamps.append(f"构建: {built}")
+    # 日期必须是可见文本：Obtainium 只在元素文本里找，读不到属性
+    release_text = (" " + " ".join(html.escape(s) for s in stamps)) if stamps else ""
     stale = (
         f' <span class="stale">[沿用 {html.escape(describe_fetched_at(result.fetched_at))}]</span>'
         if result.stale
@@ -674,7 +867,7 @@ def render_line(result: SourceResult) -> str:
     return (
         f'    <p data-source="{source}" data-fetched-at="{fetched_at}">{name}: '
         f'<a href="{url}">v{version}</a> '
-        f"({reference_label}: {reference}){stale}</p>"
+        f"({reference_label}: {reference}){release_text}{stale}</p>"
     )
 
 
@@ -815,6 +1008,11 @@ def load_state(path: Path) -> dict:
 
     state = empty_state()
     state["updated_at"] = str(data.get("updated_at") or "")
+    try:
+        schema_version = int(data.get("_version", 1))
+    except (TypeError, ValueError):
+        schema_version = 1
+
     for name, entry in data["entries"].items():
         if not isinstance(entry, dict):
             continue
@@ -822,12 +1020,21 @@ def load_state(path: Path) -> dict:
         version = str(entry.get("version") or "")
         if not url or not version:
             continue
+
+        released_at = str(entry.get("released_at") or "")
+        built_at = str(entry.get("built_at") or "")
+        # v1 只有 released_at，且存的是构建时间；迁移到 v2 的 built_at
+        if schema_version < 2 and not built_at and released_at:
+            built_at, released_at = released_at, ""
+
         state["entries"][str(name)] = {
             "version": version,
             "url": url,
             "reference": str(entry.get("reference") or ""),
             "reference_label": str(entry.get("reference_label") or "文件名参考"),
             "fetched_at": str(entry.get("fetched_at") or ""),
+            "released_at": released_at,
+            "built_at": built_at,
         }
     return state
 
@@ -867,6 +1074,8 @@ def parse_page_entries(page_text: str) -> dict:
             "reference": reference or reference_from_url(url),
             "reference_label": html.unescape(match.group("reference_label")) or "文件名参考",
             "fetched_at": html.unescape(fetched_match.group("fetched")) if fetched_match else "",
+            "released_at": html.unescape(match.group("released_at") or ""),
+            "built_at": html.unescape(match.group("built_at") or ""),
         }
     return entries
 
@@ -879,12 +1088,14 @@ def fallback_state(state: Mapping, merged: Sequence[SourceResult]) -> dict:
             "reference": result.reference,
             "reference_label": result.reference_label,
             "fetched_at": result.fetched_at,
+            "released_at": result.released_at,
+            "built_at": result.built_at,
         }
         for result in merged
         if result.ok
     }
     return {
-        "_version": 1,
+        "_version": 2,
         "updated_at": now_iso(),
         "entries": entries,
     }
@@ -918,6 +1129,8 @@ def merge_with_last_good(
                 reference=str(entry.get("reference") or ""),
                 reference_label=str(entry.get("reference_label") or "文件名参考"),
                 fetched_at=str(entry.get("fetched_at") or ""),
+                released_at=str(entry.get("released_at") or ""),
+                built_at=str(entry.get("built_at") or ""),
                 stale=True,
                 message=f"{result.name} 本次抓取失败，沿用上次成功值 v{entry['version']}（{result.message}）",
             )
@@ -943,6 +1156,8 @@ def status_snapshot(results: Sequence[SourceResult], generated_at: str, publishe
                 "stale": result.stale,
                 "version": result.version,
                 "url": result.url,
+                "released_at": result.released_at,
+                "built_at": result.built_at,
                 "duration_ms": result.duration_ms,
                 "message": result.message,
             }

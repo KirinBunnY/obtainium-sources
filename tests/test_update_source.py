@@ -113,6 +113,7 @@ def run_args(tmp_path, *extra):
 
 def test_redirect_source_parses_version_and_reference(monkeypatch):
     patch_location(monkeypatch, YUANSHEN_LOCATION)
+    monkeypatch.setattr(us, "fetch_official_release_at", lambda game, version: "")
 
     result = us.fetch_redirect_source(redirect_source("原神"))
 
@@ -121,11 +122,31 @@ def test_redirect_source_parses_version_and_reference(monkeypatch):
     assert result.url == YUANSHEN_LOCATION
     assert result.reference == "yuanshen_7.0.0.apk"
     assert result.fetched_at
+    assert result.released_at == ""
+    # 链接里带 20260803155301，按北京时间解析为构建时间
+    assert result.built_at == "2026-08-03T15:53:01+08:00"
     assert us.render_line(result) == (
         f'    <p data-source="原神" data-fetched-at="{result.fetched_at}">原神: '
         f'<a href="{YUANSHEN_LOCATION}">v7.0.0</a> '
-        "(文件名参考: yuanshen_7.0.0.apk)</p>"
+        "(文件名参考: yuanshen_7.0.0.apk) 构建: 2026-08-03 15:53:01</p>"
     )
+
+
+def test_redirect_source_keeps_official_release_and_build_time(monkeypatch):
+    patch_location(monkeypatch, YUANSHEN_LOCATION)
+    monkeypatch.setattr(
+        us,
+        "fetch_official_release_at",
+        lambda game, version: "2026-09-23T07:00:00+08:00",
+    )
+
+    result = us.fetch_redirect_source(redirect_source("原神"))
+
+    assert result.released_at == "2026-09-23T07:00:00+08:00"
+    assert result.built_at == "2026-08-03T15:53:01+08:00"
+    line = us.render_line(result)
+    assert " 发行: 2026-09-23 07:00:00" in line
+    assert " 构建: 2026-08-03 15:53:01" in line
 
 
 def test_pvz2_uses_its_own_version_pattern(monkeypatch):
@@ -138,6 +159,71 @@ def test_pvz2_uses_its_own_version_pattern(monkeypatch):
 
     assert result.ok
     assert result.version == "4.2.3"
+    # 链接里没有日期，不能凭空造一个
+    assert result.released_at == ""
+    assert result.built_at == ""
+
+
+def test_mihoyo_released_at_reads_the_build_timestamp():
+    released = us.mihoyo_released_at(
+        "https://autopatchcn.yuanshen.com/client_app/download/Android/"
+        "20260915143557_znpK0stDcvvXlIk8/mihoyo/yuanshen_7.1.0.apk"
+    )
+
+    assert released == "2026-09-15T14:35:57+08:00"
+    assert us.released_date(released) == "2026-09-15"
+
+
+def test_mihoyo_released_at_returns_empty_without_a_timestamp():
+    assert us.mihoyo_released_at(
+        "https://pvz2apk-cdn.hrgame.com.cn/423/baokai_4.2.3_1856_664_dj2.0-4.0.0.apk"
+    ) == ""
+
+
+def test_kuaibao_released_at_reads_the_filename_date():
+    assert us.kuaibao_released_at("HYKB15820420260819wap1.apk") == "2026-08-19"
+    assert us.kuaibao_released_at("HYKB158204wap1.apk") == ""
+
+
+def test_parse_announcement_release_matches_update_announcement():
+    payload = {
+        "timezone": 8,
+        "list": [
+            {
+                "list": [
+                    {"title": "7.1版本活动", "start_time": "2026-09-12 21:15:00"},
+                    {"title": "「往冥府的安魂歌」7.1版本更新说明", "start_time": "2026-09-23 07:00:00"},
+                ]
+            }
+        ],
+    }
+
+    assert us.parse_announcement_release(payload, "7.1") == "2026-09-23T07:00:00+08:00"
+
+
+def test_parse_announcement_release_returns_empty_without_a_match():
+    payload = {"timezone": 8, "list": [{"list": [{"title": "7.1版本活动", "start_time": "2026-09-12 21:15:00"}]}]}
+
+    assert us.parse_announcement_release(payload, "7.1") == ""
+    assert us.parse_announcement_release({}, "7.1") == ""
+
+
+def test_parse_announcement_release_strips_html_titles():
+    payload = {
+        "timezone": 8,
+        "list": [
+            {
+                "list": [
+                    {
+                        "title": '<p style="white-space: pre-wrap;">3.3版本「重返天空的旅程」更新公告</p>',
+                        "start_time": "2026-10-21 06:00:00",
+                    }
+                ]
+            }
+        ],
+    }
+
+    assert us.parse_announcement_release(payload, "3.3") == "2026-10-21T06:00:00+08:00"
 
 
 def test_taptap_rewrites_version_and_download_url(monkeypatch):
@@ -217,6 +303,8 @@ def test_kuaibao_builds_four_part_version(monkeypatch):
     assert result.ok
     assert result.version == "1.5.8.204"
     assert result.reference == filename
+    assert result.released_at == ""
+    assert result.built_at == "2026-08-19"
 
 
 def test_miyoushe_builds_download_url_from_api_version(monkeypatch):
@@ -249,18 +337,32 @@ def test_miyoushe_empty_payload_is_failure(monkeypatch):
 
 
 def test_chelper_prefers_changelog_version(monkeypatch):
-    monkeypatch.setattr(
-        us,
-        "fetch_page",
-        lambda url, **kwargs: ("未发布内容\n\n26.1.0\n\n- 修复若干问题\n", ""),
+    changelog = (
+        "v26.1.0 20260828 1. 增加若干功能\n"
+        "v26.0.9 20260718 2. 修改若干问题\n"
     )
+    monkeypatch.setattr(us, "fetch_page", lambda url, **kwargs: (changelog, ""))
 
     result = us.fetch_chelper()
 
     assert result.ok
     assert result.version == "26.1.0"
+    assert result.released_at == "2026-08-28"
     assert result.reference_label == "识别标识"
-    assert us.render_line(result).endswith("(识别标识: chelper)</p>")
+    assert us.render_line(result).endswith(
+        "(识别标识: chelper) 发行: 2026-08-28</p>"
+    )
+
+
+def test_parse_chelper_release_date_reads_the_version_line():
+    markdown = "v26.1.0 20260828 1. 增加\nv26.0.9 20260718 2. 修改\n"
+
+    assert us.parse_chelper_release_date(markdown) == "2026-08-28"
+
+
+def test_parse_chelper_release_date_returns_empty_without_a_date():
+    assert us.parse_chelper_release_date("v26.1.0 1. 增加") == ""
+    assert us.parse_chelper_release_date("没有版本行") == ""
 
 
 def test_chelper_falls_back_to_release_notes(monkeypatch):
@@ -277,6 +379,8 @@ def test_chelper_falls_back_to_release_notes(monkeypatch):
 
     assert result.ok
     assert result.version == "1.2.3"
+    # 更新日志页里没有日期，不能凭空造一个
+    assert result.released_at == ""
 
 
 def test_chelper_without_any_version_is_failure(monkeypatch):
@@ -393,6 +497,19 @@ def test_stale_marker_without_timestamp_says_so():
     assert "[沿用 上次成功值]" in us.render_line(entry)
     assert us.describe_fetched_at("") == "上次成功值"
     assert us.describe_fetched_at("2026-09-10T06:30:00+08:00") == "2026-09-10 06:30"
+
+
+def test_render_line_shows_release_date_only_when_known():
+    with_date = us.replace(sample_result(), released_at="2026-09-15T14:35:57+08:00")
+    built_only = us.replace(sample_result(), built_at="2026-09-15T14:35:57+08:00")
+    date_only = us.replace(sample_result(), released_at="2026-08-19")
+    without_date = sample_result()
+
+    assert " 发行: 2026-09-15 14:35:57" in us.render_line(with_date)
+    assert " 构建: 2026-09-15 14:35:57" in us.render_line(built_only)
+    assert "发行:" not in us.render_line(built_only)
+    assert " 发行: 2026-08-19" in us.render_line(date_only)
+    assert "发行:" not in us.render_line(without_date)
 
 
 def test_render_page_escapes_untrusted_values():
@@ -626,13 +743,35 @@ def test_build_sources_covers_every_app():
 
 def test_state_roundtrip(tmp_path):
     state_path = tmp_path / "state.json"
-    us.write_page(state_path, json.dumps(us.fallback_state({}, [sample_result()]), ensure_ascii=False))
+    result = us.replace(
+        sample_result(),
+        released_at="2026-09-23T07:00:00+08:00",
+        built_at="2026-09-15T14:35:57+08:00",
+    )
+    us.write_page(state_path, json.dumps(us.fallback_state({}, [result]), ensure_ascii=False))
 
     state = us.load_state(state_path)
 
     assert state["updated_at"]
     assert state["entries"]["米游社"]["version"] == "2.115.0"
     assert state["entries"]["米游社"]["url"] == "https://example.com/a.apk"
+    assert state["entries"]["米游社"]["released_at"] == "2026-09-23T07:00:00+08:00"
+    assert state["entries"]["米游社"]["built_at"] == "2026-09-15T14:35:57+08:00"
+
+
+def test_legacy_state_moves_old_release_time_into_build_time(tmp_path):
+    """v1 的 released_at 存的是构建时间，升级后要迁移到 built_at。"""
+    state_path = tmp_path / "state.json"
+    write_state(
+        state_path,
+        {"米游社": {"url": "https://example.com/a.apk", "version": "1.0.0",
+                    "released_at": "2026-09-15T14:35:57+08:00"}},
+    )
+
+    entry = us.load_state(state_path)["entries"]["米游社"]
+
+    assert entry["released_at"] == ""
+    assert entry["built_at"] == "2026-09-15T14:35:57+08:00"
 
 
 def test_corrupt_state_is_ignored(tmp_path, capsys):
@@ -708,6 +847,20 @@ def test_parse_page_entries_recovers_values_from_an_existing_page():
     assert entries["米游社"]["url"] == "https://example.com/a.apk"
     assert entries["米游社"]["reference"] == "mihoyobbs"
     assert entries["米游社"]["fetched_at"] == "2026-09-12T06:30:00+08:00"
+
+
+def test_parse_page_entries_recovers_release_date():
+    """页面上的发行/构建时间都要能反推回来。"""
+    result = us.replace(
+        sample_result(),
+        released_at="2026-09-23T07:00:00+08:00",
+        built_at="2026-09-15T14:35:57+08:00",
+    )
+
+    entries = us.parse_page_entries(us.render_page([result]))
+
+    assert entries["米游社"]["released_at"] == "2026-09-23 07:00:00"
+    assert entries["米游社"]["built_at"] == "2026-09-15 14:35:57"
 
 
 def test_parse_page_entries_reads_the_legacy_page_format():
