@@ -1127,6 +1127,17 @@ def merge_with_last_good(
 
     for result in results:
         if result.ok:
+            # 公告接口偶发失败时，同一版本沿用状态文件里的发行/构建时间，
+            # 避免页面因为一次网络抖动而丢掉日期；版本不同则不沿用。
+            entry = entries.get(result.name)
+            if isinstance(entry, Mapping) and str(entry.get("version") or "") == result.version:
+                patches = {}
+                if not result.released_at and entry.get("released_at"):
+                    patches["released_at"] = str(entry["released_at"])
+                if not result.built_at and entry.get("built_at"):
+                    patches["built_at"] = str(entry["built_at"])
+                if patches:
+                    result = replace(result, **patches)
             merged.append(replace(result, stale=False))
             continue
 

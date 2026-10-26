@@ -129,7 +129,7 @@ https://hkrpg-api.mihoyo.com/common/hkrpg_cn/announcement/api/getAnnList
 https://announcement-api.mihoyo.com/common/nap_cn/announcement/api/getAnnList
 ```
 
-按「短版本号 + 更新说明/更新公告」匹配，取 `start_time`；公告接口不可用时只保留构建时间。
+按「短版本号 + 更新说明/更新公告」匹配，取 `start_time`；公告接口不可用时只保留构建时间。若状态文件里**同一版本**已有发行时间，会沿用它（版本不同则不沿用），避免一次网络抖动就丢日期。
 
 在 Obtainium 里提取**发行时间**（一条配置兼容“带时间”和“只有日期”两种写法）：
 

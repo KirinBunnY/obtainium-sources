@@ -857,6 +857,60 @@ def test_merge_without_history_drops_failed_sources():
     assert stale == []
 
 
+def test_merge_carries_release_time_for_the_same_version():
+    """公告接口偶发失败时，同版本要沿用状态里的发行时间。"""
+    results = [
+        us.SourceResult(
+            name="云·星穹铁道",
+            ok=True,
+            version="4.6.0",
+            url="https://example.com/a.apk",
+            built_at="2026-09-16T16:12:37+08:00",
+        )
+    ]
+    state = {
+        "entries": {
+            "云·星穹铁道": {
+                "version": "4.6.0",
+                "url": "https://example.com/a.apk",
+                "released_at": "2026-09-28T07:00:00+08:00",
+                "built_at": "2026-09-16T16:12:37+08:00",
+            }
+        }
+    }
+
+    merged, stale = us.merge_with_last_good(results, state)
+
+    assert merged[0].released_at == "2026-09-28T07:00:00+08:00"
+    assert merged[0].built_at == "2026-09-16T16:12:37+08:00"
+    assert not merged[0].stale
+    assert stale == []
+
+
+def test_merge_keeps_fresh_release_time_and_ignores_state_for_other_versions():
+    result = us.SourceResult(
+        name="云·星穹铁道",
+        ok=True,
+        version="4.7.0",
+        url="https://example.com/a.apk",
+        released_at="2026-10-01T07:00:00+08:00",
+    )
+    state = {
+        "entries": {
+            "云·星穹铁道": {
+                "version": "4.6.0",
+                "url": "https://example.com/old.apk",
+                "released_at": "2026-09-28T07:00:00+08:00",
+            }
+        }
+    }
+
+    merged, _ = us.merge_with_last_good([result], state)
+
+    # 版本不同，绝不能把旧版本的发行时间套到新版本上
+    assert merged[0].released_at == "2026-10-01T07:00:00+08:00"
+
+
 def test_parse_page_entries_recovers_values_from_an_existing_page():
     """状态文件丢失时，从已有页面反推上次成功值。"""
     page = us.render_page([sample_result("米游社", version="2.115.0")])
